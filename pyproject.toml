@@ -11,7 +11,9 @@ requires-python = ">=3.11"
 dependencies = ["numpy>=1.26", "scipy>=1.11"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "hypothesis>=6.100"]
+# Independent cross-checks: QuantLib reference prices and mutation testing.
+validation = ["QuantLib>=1.30", "cosmic-ray>=8.3"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

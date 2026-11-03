@@ -42,6 +42,12 @@ def _validate(
     return arrays
 
 
+def _validate_option(option: str) -> None:
+    """Raise ValueError unless option is "call" or "put"."""
+    if option not in ("call", "put"):
+        raise ValueError(f"option must be 'call' or 'put', got {option!r}.")
+
+
 def _as_output(x: NDArray[np.float64]) -> FloatOrArray:
     """Return a plain float for 0-dimensional results, otherwise the array."""
     return float(x) if x.ndim == 0 else x
@@ -151,9 +157,7 @@ def bs_price(
         ValueError: if S or K <= 0, T < 0, sigma < 0, any input is not finite,
             or option is not "call" or "put".
     """
-    if option not in ("call", "put"):
-        raise ValueError(f"option must be 'call' or 'put', got {option!r}.")
-
+    _validate_option(option)
     S_, K_, T_, r_, sigma_, q_ = _validate(S, K, T, r, sigma, q)
     d1, d2, degenerate = _d1_d2_arrays(S_, K_, T_, r_, sigma_, q_)
 
