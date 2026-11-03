@@ -21,7 +21,25 @@ values that follow each node.
 
 from __future__ import annotations
 
+import numpy as np
 from numpy.typing import ArrayLike
+
+from optionlab.black_scholes import _validate, _validate_option
+
+EXERCISE_TYPES = ("european", "american")
+
+
+def _validate_tree_args(steps: int, exercise: str, *inputs: ArrayLike) -> None:
+    """Checks specific to the tree, on top of the usual Black-Scholes input rules."""
+    if any(np.ndim(x) != 0 for x in inputs):
+        raise ValueError(
+            "crr_price accepts scalar inputs only; use np.vectorize(crr_price) to price many options."
+        )
+    # bool is a subclass of int in Python, so exclude it explicitly.
+    if isinstance(steps, bool) or not isinstance(steps, (int, np.integer)) or steps < 1:
+        raise ValueError(f"steps must be an integer >= 1, got {steps!r}.")
+    if exercise not in EXERCISE_TYPES:
+        raise ValueError(f"exercise must be 'european' or 'american', got {exercise!r}.")
 
 
 def crr_price(
@@ -61,4 +79,45 @@ def crr_price(
             steps not an integer >= 1, unknown option or exercise type, or when the
             risk-neutral probability p falls outside (0, 1) (increase `steps`).
     """
-    raise NotImplementedError("crr_price is implemented in Phase 3, Step 2.")
+    # 1. Validate: tree-specific rules first, then the same rules as bs_price.
+    _validate_option(option)
+    _validate_tree_args(steps, exercise, S, K, T, r, sigma, q)
+    S, K, T, r, sigma, q = (float(x) for x in _validate(S, K, T, r, sigma, q))
+    if sigma == 0:
+        raise ValueError("sigma must be > 0 for a binomial tree (with sigma == 0, u == d).")
+    if exercise == "american":
+        raise NotImplementedError("American exercise is added in Phase 3, Step 4.")
+
+    def payoff(stock: np.ndarray) -> np.ndarray:
+        return np.maximum(stock - K, 0.0) if option == "call" else np.maximum(K - stock, 0.0)
+
+    # 2. No time left: the option is worth its intrinsic value.
+    if T == 0:
+        return float(payoff(np.array(S)))
+
+    # 3. Tree parameters.
+    dt = T / steps
+    u = np.exp(sigma * np.sqrt(dt))
+    d = 1.0 / u
+    growth = np.exp((r - q) * dt)  # expected growth of the stock over one step
+    p = (growth - d) / (u - d)  # risk-neutral probability of an up move
+    if not 0.0 < p < 1.0:
+        raise ValueError(
+            f"Risk-neutral probability p = {p:.4f} is outside (0, 1): one step is too long "
+            f"for these r, q and sigma. Increase steps."
+        )
+    discount = np.exp(-r * dt)
+
+    # 4. Stock prices at expiry: node j has had j up moves and (steps - j) down moves.
+    j = np.arange(steps + 1)
+    stock_at_expiry = S * u**j * d ** (steps - j)
+    values = payoff(stock_at_expiry)
+
+    # 5. Backward induction. At each step back, the node below each pair of
+    #    neighbours is worth the discounted probability-weighted average of the two.
+    #    values[1:] are the "up" children and values[:-1] the "down" children,
+    #    so the array gets one element shorter every step, ending with a single value.
+    for _ in range(steps):
+        values = discount * (p * values[1:] + (1.0 - p) * values[:-1])
+
+    return float(values[0])
