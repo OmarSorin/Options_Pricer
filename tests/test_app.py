@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
-from optionlab import bs_price, crr_price  # noqa: E402
+from optionlab import bs_price, crr_price, delta, numerical_greeks, theta  # noqa: E402
 
 APP = str(Path(__file__).resolve().parent.parent / "app" / "streamlit_app.py")
 
@@ -48,3 +48,30 @@ def test_library_error_is_shown_not_raised():
     assert any("sigma must be > 0" in e.value for e in at.error)
     # Black-Scholes is still fine at sigma == 0, so its price is still shown.
     assert metric(at, "Black-Scholes (European)") != "n/a"
+
+
+def greeks_table(at: AppTest):
+    return at.dataframe[0].value.set_index("Greek")
+
+
+def test_greeks_table_shows_library_values():
+    at = run_app()
+    table = greeks_table(at)
+    args = (100, 100, 1, 0.05, 0.2)
+    assert table.loc["Delta", "Analytic"] == pytest.approx(delta(*args))
+    assert table.loc["Delta", "Numerical (bumping)"] == pytest.approx(numerical_greeks(*args)["delta"])
+    # Quoted units: theta per calendar day = theta per year / 365.
+    assert table.loc["Theta", "As usually quoted"] == pytest.approx(theta(*args) / 365)
+
+
+def test_greeks_tab_draws_six_charts():
+    at = run_app()
+    assert len(at.get("vega_lite_chart")) == 6  # price + five Greeks
+
+
+def test_greeks_error_at_expiry_is_shown_not_raised():
+    at = run_app()
+    at.slider(key="T").set_value(0.0).run()  # Greeks are undefined at T == 0
+    assert not at.exception
+    assert any("Greeks undefined" in e.value for e in at.error)
+    assert len(at.dataframe) == 0

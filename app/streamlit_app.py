@@ -13,9 +13,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import altair as alt
+import numpy as np
+import pandas as pd
 import streamlit as st
 
-from optionlab import bs_price, crr_price
+from optionlab import bs_price, crr_price, delta, gamma, numerical_greeks, rho, theta, vega
+
+SERIES = "#2a78d6"  # line colour, the same blue as the convergence plot
+MUTED = "#8a8984"  # reference marks, readable on light and dark backgrounds
 
 
 def sidebar_inputs() -> dict:
@@ -84,15 +90,108 @@ def pricing_tab(inputs: dict) -> None:
         )
 
 
+def analytic_greeks(S, K, T, r, sigma, q, option) -> dict:
+    """All five analytic Greeks. S may be an array (the library is vectorized).
+
+    gamma and vega take no `option` argument: they're the same for a call and a put.
+    """
+    return {
+        "delta": delta(S, K, T, r, sigma, q, option),
+        "gamma": gamma(S, K, T, r, sigma, q),
+        "vega": vega(S, K, T, r, sigma, q),
+        "theta": theta(S, K, T, r, sigma, q, option),
+        "rho": rho(S, K, T, r, sigma, q, option),
+    }
+
+
+# Library units, and how traders usually quote each Greek: (label, unit, divide by, quoted unit).
+GREEK_UNITS = {
+    "delta": ("Delta", "per 1.00 move in S", 1, "per 1.00 move in S"),
+    "gamma": ("Gamma", "change in delta per 1.00 move in S", 1, "change in delta per 1.00 move in S"),
+    "vega": ("Vega", "per 1.00 change in σ", 100, "per 1 vol point (σ + 1%)"),
+    "theta": ("Theta", "per year", 365, "per calendar day"),
+    "rho": ("Rho", "per 1.00 change in r", 100, "per 1% change in r"),
+}
+
+
+def spot_chart(df: pd.DataFrame, column: str, title: str, spot: float) -> alt.LayerChart:
+    """One line against S, a dashed rule at today's S, and a hover readout.
+
+    Hovering anywhere snaps to the nearest S on the curve and shows its value.
+    """
+    hover = alt.selection_point(fields=["S"], nearest=True, on="pointerover", empty=False)
+    base = alt.Chart(df).encode(x=alt.X("S:Q", title="Spot S"))
+    line = base.mark_line(color=SERIES, strokeWidth=2).encode(y=alt.Y(f"{column}:Q", title=None))
+    points = (
+        base.mark_point(color=SERIES, filled=True, size=60)
+        .encode(
+            y=f"{column}:Q",
+            opacity=alt.condition(hover, alt.value(1), alt.value(0)),  # only the hovered point is visible
+            tooltip=[alt.Tooltip("S:Q", format=".2f"), alt.Tooltip(f"{column}:Q", title=title, format=".4f")],
+        )
+        .add_params(hover)
+    )
+    today = alt.Chart(pd.DataFrame({"S": [spot]})).mark_rule(color=MUTED, strokeDash=[4, 3]).encode(x="S:Q")
+    return (line + points + today).properties(title=title, height=220)
+
+
+def greeks_tab(inputs: dict) -> None:
+    st.subheader("Greeks (Black-Scholes)")
+    try:
+        exact = analytic_greeks(**inputs)
+        bumped = numerical_greeks(**inputs)
+    except ValueError as err:  # Greeks are undefined at T == 0 or sigma == 0
+        st.error(str(err))
+        return
+
+    # 1. Table: analytic vs finite-difference values, plus the usual trading units.
+    rows = []
+    for name, (label, unit, divisor, quoted_unit) in GREEK_UNITS.items():
+        rows.append(
+            {
+                "Greek": label,
+                "Analytic": exact[name],
+                "Numerical (bumping)": bumped[name],
+                "Library unit": unit,
+                "As usually quoted": exact[name] / divisor,
+                "Quoted unit": quoted_unit,
+            }
+        )
+    st.dataframe(
+        pd.DataFrame(rows),
+        hide_index=True,
+        column_config={c: st.column_config.NumberColumn(format="%.6f") for c in ("Analytic", "Numerical (bumping)", "As usually quoted")},
+    )
+    st.caption(
+        "Analytic = the closed-form formulas. Numerical = reprice with `bs_price` after a small bump "
+        "(central differences). They should agree to about 5 digits; for very short expiries or low "
+        "volatility (σ√T below about 0.05) the numerical gamma gets noisy."
+    )
+
+    # 2. Charts: price and each Greek as S moves, with everything else held fixed.
+    S, K = inputs["S"], inputs["K"]
+    spots = np.linspace(min(0.5 * K, 0.8 * S), max(1.5 * K, 1.2 * S), 201)
+    others = {k: v for k, v in inputs.items() if k != "S"}
+    df = pd.DataFrame({"S": spots, "price": bs_price(spots, **others), **analytic_greeks(spots, **others)})
+
+    titles = {"price": "Price"} | {name: f"{label} ({unit})" for name, (label, unit, *_) in GREEK_UNITS.items()}
+    st.caption(f"Each chart varies S and keeps K, T, r, σ, q fixed. The dashed line is today's S = {S:g}.")
+    columns = st.columns(3)
+    for i, (column, title) in enumerate(titles.items()):
+        columns[i % 3].altair_chart(spot_chart(df, column, title, S), width="stretch")
+
+
 def main() -> None:
     st.set_page_config(page_title="optionlab", layout="wide")
     st.title("optionlab")
     st.write("Move the sliders on the left; every number below is recomputed by the library.")
 
     inputs = sidebar_inputs()
-    (pricing,) = st.tabs(["Pricing"])
+    pricing, greeks = st.tabs(["Pricing", "Greeks"])
     with pricing:
         pricing_tab(inputs)
+    with greeks:
+        greeks_tab(inputs)
 
 
 main()
