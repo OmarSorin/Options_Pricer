@@ -63,7 +63,8 @@ def crr_price(
             a more accurate price and a slower calculation; the error shrinks
             roughly like 1/steps.
         exercise: "european" (exercise only at expiry) or "american" (exercise at any
-            node). American exercise is added in Phase 3, Step 4.
+            node, including today). At every node an American option is worth the
+            larger of exercising now and the discounted value of waiting.
 
     Returns:
         The option price as a float.
@@ -85,8 +86,6 @@ def crr_price(
     S, K, T, r, sigma, q = (float(x) for x in _validate(S, K, T, r, sigma, q))
     if sigma == 0:
         raise ValueError("sigma must be > 0 for a binomial tree (with sigma == 0, u == d).")
-    if exercise == "american":
-        raise NotImplementedError("American exercise is added in Phase 3, Step 4.")
 
     def payoff(stock: np.ndarray) -> np.ndarray:
         return np.maximum(stock - K, 0.0) if option == "call" else np.maximum(K - stock, 0.0)
@@ -113,11 +112,16 @@ def crr_price(
     stock_at_expiry = S * u**j * d ** (steps - j)
     values = payoff(stock_at_expiry)
 
-    # 5. Backward induction. At each step back, the node below each pair of
-    #    neighbours is worth the discounted probability-weighted average of the two.
-    #    values[1:] are the "up" children and values[:-1] the "down" children,
+    # 5. Backward induction, from step (steps - 1) down to step 0 (today).
+    #    Each node is worth the discounted probability-weighted average of its two
+    #    children: values[1:] are the "up" children and values[:-1] the "down" ones,
     #    so the array gets one element shorter every step, ending with a single value.
-    for _ in range(steps):
-        values = discount * (p * values[1:] + (1.0 - p) * values[:-1])
+    for i in range(steps - 1, -1, -1):
+        values = discount * (p * values[1:] + (1.0 - p) * values[:-1])  # value of waiting
+        if exercise == "american":
+            # The holder may also exercise now: the node is worth whichever is larger.
+            j = np.arange(i + 1)
+            stock_now = S * u**j * d ** (i - j)  # stock prices at the i + 1 nodes of step i
+            values = np.maximum(values, payoff(stock_now))
 
     return float(values[0])
