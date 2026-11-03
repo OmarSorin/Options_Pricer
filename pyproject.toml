@@ -16,6 +16,8 @@ dev = ["pytest>=8", "hypothesis>=6.100"]
 validation = ["QuantLib>=1.30", "cosmic-ray>=8.3"]
 # Convergence plot (scripts/plot_convergence.py).
 plots = ["matplotlib>=3.8"]
+# Interactive demo in the browser (app/streamlit_app.py).
+app = ["streamlit>=1.40"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -43,6 +43,16 @@ pytest
 The convergence plot is regenerated with `pip install -e ".[plots]"` and
 `python scripts/plot_convergence.py`.
 
+## Interactive demo
+
+A Streamlit page to play with the pricers in the browser: set S, K, T, r, σ, q and the
+number of tree steps, and compare Black-Scholes with the European and American tree.
+
+```bash
+pip install -e ".[app]"
+streamlit run app/streamlit_app.py
+```
+
 ## Binomial tree convergence
 
 The CRR tree converges to the Black-Scholes price, zig-zagging between odd and even
