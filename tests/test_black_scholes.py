@@ -143,3 +143,19 @@ def test_invalid_inputs_raise_value_error(kwargs):
 def test_invalid_input_inside_array_raises():
     with pytest.raises(ValueError):
         bs_price(np.array([100.0, -5.0]), 100, 1, 0.05, 0.2)
+
+
+# --- Added after mutation testing (cosmic-ray found these gaps) ---
+
+
+def test_small_positive_spot_and_strike_are_accepted():
+    # Validation must reject S, K <= 0 but accept anything above 0, including values below 1.
+    price = bs_price(0.5, 0.4, 1, 0.05, 0.2)
+    assert np.isfinite(price) and price > 0
+
+
+@pytest.mark.parametrize("r, q, expected", [(0.01, 0.03, -np.inf), (0.03, 0.01, np.inf)])
+def test_d1_d2_zero_vol_limit_follows_the_forward(r, q, expected):
+    # With sigma = 0 and S == K, the sign of the limit is set by the forward
+    # S*exp((r - q)T) versus K, i.e. by the sign of r - q.
+    assert d1_d2(100, 100, 1, r, 0.0, q) == (expected, expected)

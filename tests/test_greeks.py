@@ -159,3 +159,24 @@ def test_invalid_inputs_raise(func, kwargs):
 def test_unknown_option_type_raises(func):
     with pytest.raises(ValueError, match="option"):
         func(100, 100, 1, 0.05, 0.2, option="straddle")
+
+
+# --- Added after mutation testing (cosmic-ray found these gaps) ---
+
+
+@pytest.mark.parametrize("func", ALL_FUNCS)
+def test_default_dividend_yield_is_zero(func):
+    with_default = func(100, 100, 1, 0.05, 0.2)
+    explicit = func(100, 100, 1, 0.05, 0.2, 0.0)
+    if isinstance(with_default, dict):
+        assert with_default == pytest.approx(explicit)
+    else:
+        assert with_default == explicit
+
+
+def test_numerical_greeks_at_very_short_expiry():
+    # T smaller than the default time bump (1e-5): the bump must shrink so that
+    # T - h stays positive, otherwise bs_price would be called with negative T.
+    result = numerical_greeks(100, 100, 5e-6, 0.05, 0.2)
+    assert all(np.isfinite(v) for v in result.values())
+    assert result["theta"] < 0
