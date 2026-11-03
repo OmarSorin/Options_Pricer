@@ -14,6 +14,8 @@ dependencies = ["numpy>=1.26", "scipy>=1.11"]
 dev = ["pytest>=8", "hypothesis>=6.100"]
 # Independent cross-checks: QuantLib reference prices and mutation testing.
 validation = ["QuantLib>=1.30", "cosmic-ray>=8.3"]
+# Convergence plot (scripts/plot_convergence.py).
+plots = ["matplotlib>=3.8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
