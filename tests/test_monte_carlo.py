@@ -50,6 +50,40 @@ def test_standard_error_is_the_expected_size():
     assert 0.040 < result.std_error < 0.055
 
 
+# --- Is the standard error itself right? ------------------------------------------------
+# The tests above only check that the price is within a few SE. If the SE were too big,
+# they would pass too easily. These two tests check the SE against theory.
+
+BS_REF = 10.4506
+
+
+@pytest.mark.parametrize(
+    "q, option, true_price",
+    [(0.0, "call", BS_REF), (0.02, "put", 6.3301)],
+)
+def test_95_percent_intervals_contain_the_true_price_95_percent_of_the_time(q, option, true_price):
+    # If the SE is right, price ± 1.96 SE contains the true price in 95% of runs. Over 1,000
+    # runs the share has noise of sqrt(0.95 * 0.05 / 1000) ≈ 0.007 (binomial), so [0.93, 0.97]
+    # is about ±3 standard deviations. An SE that is 10% too small covers only ~92.5% and
+    # fails; one that is too big needs to be ~15% off to fail (it covers ~97.6%).
+    runs = 1_000
+    hits = 0
+    for seed in range(runs):
+        result = mc_price(**REF, q=q, option=option, paths=10_000, seed=seed)
+        hits += abs(result.price - true_price) <= 1.96 * result.std_error
+    coverage = hits / runs
+    assert 0.93 <= coverage <= 0.97, f"coverage {coverage:.3f}"
+
+
+def test_standard_error_shrinks_like_one_over_sqrt_paths():
+    # Theory: SE = std / sqrt(n), so on a log-log plot SE against paths is a line of slope -0.5.
+    # (This mirrors the tree's 1/N slope test in test_binomial.py.)
+    paths = np.logspace(3, 6, 10).astype(int)
+    errors = [mc_price(**REF, paths=int(n), seed=11).std_error for n in paths]
+    slope = np.polyfit(np.log(paths), np.log(errors), 1)[0]
+    assert -0.55 <= slope <= -0.45, f"fitted slope {slope:.3f}"
+
+
 # --- Reproducibility --------------------------------------------------------------------
 
 
