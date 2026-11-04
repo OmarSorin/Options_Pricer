@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
-from optionlab import bs_price, crr_price, delta, numerical_greeks, theta  # noqa: E402
+from optionlab import bs_price, crr_price, delta, mc_price, numerical_greeks, theta  # noqa: E402
 
 APP = str(Path(__file__).resolve().parent.parent / "app" / "streamlit_app.py")
 
@@ -132,7 +132,7 @@ def test_greek_sentences_flip_for_a_put():
 
 def test_greeks_table_is_under_show_the_maths():
     at = run_app()
-    assert sum(e.label == "Show the maths" for e in at.expander) == 2  # one per tab
+    assert sum(e.label == "Show the maths" for e in at.expander) == 3  # one per tab: Pricing, Greeks, Monte Carlo
 
 
 def test_greeks_tab_draws_six_charts():
@@ -146,3 +146,55 @@ def test_greeks_error_at_expiry_is_shown_not_raised():
     assert not at.exception
     assert any("Greeks undefined" in e.value for e in at.error)
     assert len(at.dataframe) == 0
+
+
+# --- Monte Carlo tab --------------------------------------------------------------------
+
+MC_LABEL = "Simulated price (Monte Carlo)"
+
+
+def reference_mc(**kwargs):
+    """mc_price for the default sidebar option, with the tab's default settings."""
+    args = dict(S=100, K=100, T=1, r=0.05, sigma=0.2, q=0.0, option="call", paths=100_000, seed=42) | kwargs
+    return mc_price(**args)
+
+
+def test_monte_carlo_tab_shows_library_price_and_range():
+    at = run_app()
+    assert not at.exception
+    result = reference_mc()
+    assert metric(at, MC_LABEL) == f"{result.price:.4f}"
+    half_width = 1.96 * result.std_error
+    assert f"give or take **${half_width:.2f}**" in markdown_text(at)
+    assert metric(at, "95% range") == f"{result.price - half_width:.2f} – {result.price + half_width:.2f}"
+
+
+def test_antithetic_toggle_narrows_the_range():
+    at = run_app()
+    at.toggle(key="mc_antithetic").set_value(True).run()
+    plain, anti = reference_mc(), reference_mc(antithetic=True)
+    assert anti.std_error < plain.std_error
+    assert metric(at, MC_LABEL) == f"{anti.price:.4f}"
+    assert f"give or take **${1.96 * anti.std_error:.2f}**" in markdown_text(at)
+
+
+def test_seed_changes_the_simulated_price():
+    at = run_app()
+    at.number_input(key="mc_seed").set_value(7).run()
+    assert metric(at, MC_LABEL) == f"{reference_mc(seed=7).price:.4f}"
+    assert reference_mc(seed=7).price != reference_mc().price
+
+
+def test_heavy_tail_warning_only_when_sigma_sqrt_t_above_2():
+    at = run_app()
+    assert not any("rare, huge outcomes" in w.value for w in at.warning)
+    at.slider(key="sigma").set_value(100.0).run()
+    at.slider(key="T").set_value(5.0).run()  # sigma * sqrt(T) = 2.24
+    assert not at.exception
+    assert any("rare, huge outcomes" in w.value for w in at.warning)
+
+
+def test_deep_out_of_the_money_warning():
+    at = run_app()
+    at.number_input(key="K").set_value(300.0).run()  # call far above the spot: P(in the money) << 1%
+    assert any("Almost no simulated futures end in the money" in w.value for w in at.warning)

@@ -17,8 +17,9 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
+from scipy.stats import norm
 
-from optionlab import bs_price, crr_price, delta, gamma, numerical_greeks, rho, theta, vega
+from optionlab import bs_price, crr_price, d1_d2, delta, gamma, mc_price, numerical_greeks, rho, theta, vega
 
 SERIES = "#2a78d6"  # line colour, the same blue as the convergence plot
 MUTED = "#8a8984"  # reference marks, readable on light and dark backgrounds
@@ -307,6 +308,75 @@ def greeks_tab(inputs: dict) -> None:
         columns[i % 3].altair_chart(spot_chart(df, column, title, S), width="stretch")
 
 
+MC_LABEL = "Simulated price (Monte Carlo)"
+MC_PATH_CHOICES = [1_000, 10_000, 100_000, 1_000_000]
+
+
+def in_the_money_probability(S, K, T, r, sigma, q, option) -> float:
+    """Risk-neutral chance of finishing in the money: N(d2) for a call, N(-d2) for a put."""
+    _, d2 = d1_d2(S, K, T, r, sigma, q)
+    return float(norm.cdf(d2 if option == "call" else -d2))
+
+
+def monte_carlo_tab(inputs: dict) -> None:
+    st.subheader("Simulate many possible futures, then average")
+    st.write(
+        "Instead of a formula, Monte Carlo **simulates** thousands of random prices the stock "
+        "could have at expiry, works out what the option pays in each, and averages them. "
+        "The answer is a little different every run, so it comes with a range."
+    )
+
+    # Same trick as the Pricing tab: reserve the result's spot first, then draw the controls.
+    controls = st.columns(2)
+    paths = controls[0].select_slider(
+        "Number of simulations", MC_PATH_CHOICES, value=100_000, key="mc_paths",
+        format_func=lambda n: f"{n:,}",
+        help="More simulations give a narrower range, but slowly: 100× more makes it only 10× narrower.",
+    )
+    antithetic = controls[1].toggle(
+        "Use mirror-image pairs (antithetic variates)", key="mc_antithetic",
+        help="Use every random draw twice, once as-is and once flipped. Up and down outcomes "
+        "balance out, so the range gets narrower at no extra cost.",
+    )
+    result_area = st.container()
+    maths = st.expander("Show the maths")
+    seed = int(maths.number_input(
+        "Random seed", min_value=0, value=42, step=1, key="mc_seed",
+        help="The same seed gives exactly the same simulation. Change it to see another run.",
+    ))
+
+    result = mc_price(**inputs, paths=paths, seed=seed, antithetic=antithetic)
+    exact = bs_price(**inputs)
+    half_width = 1.96 * result.std_error  # 95% of the time the true price is within this
+    low, high = result.price - half_width, result.price + half_width
+
+    result_area.markdown(
+        f"Simulating **{paths:,}** possible futures for the stock gives a price of about "
+        f"**${result.price:,.2f}**, give or take **${half_width:.2f}** "
+        f"(95% range ${low:,.2f} – ${high:,.2f}). The exact formula says **${exact:,.2f}**."
+    )
+    col1, col2, col3 = result_area.columns(3)
+    col1.metric(MC_LABEL, f"{result.price:.4f}")
+    col2.metric("95% range", f"{low:.2f} – {high:.2f}")
+    col3.metric("Exact price (Black-Scholes)", f"{exact:.4f}")
+    if low <= exact <= high:
+        result_area.markdown("The exact price is inside the 95% range ✓")
+    else:
+        result_area.markdown("The exact price is outside the 95% range. That happens about 1 time in 20 by chance; try another seed.")
+
+    # The two limits documented in docs/monte_carlo_notes.md.
+    if inputs["sigma"] * np.sqrt(inputs["T"]) > 2:
+        result_area.warning(
+            "With this much volatility over this long, a few rare, huge outcomes carry most of "
+            "the price. The simulation will usually come out too low, and its range too narrow."
+        )
+    if in_the_money_probability(**inputs) < 0.01:
+        result_area.warning(
+            "Almost no simulated futures end in the money, so the range is unreliable "
+            "(it can even be zero while the true price is not)."
+        )
+
+
 def main() -> None:
     st.set_page_config(page_title="optionlab", layout="wide")
     st.title("optionlab")
@@ -320,11 +390,13 @@ def main() -> None:
         st.markdown(GLOSSARY)
 
     inputs = sidebar_inputs()
-    pricing, greeks = st.tabs(["Pricing", "Sensitivities (Greeks)"])
+    pricing, greeks, monte_carlo = st.tabs(["Pricing", "Sensitivities (Greeks)", "Monte Carlo"])
     with pricing:
         pricing_tab(inputs)
     with greeks:
         greeks_tab(inputs)
+    with monte_carlo:
+        monte_carlo_tab(inputs)
 
 
 main()
