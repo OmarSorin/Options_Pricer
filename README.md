@@ -8,7 +8,7 @@ and computing the Greeks. Built as a learning project in derivatives pricing.
 - [x] Phase 1: Black-Scholes closed-form pricing (European call/put, dividend yield `q`)
 - [x] Phase 2: Greeks, analytic and numerical (bumping)
 - [x] Phase 3: Binomial tree (Cox-Ross-Rubinstein), including American options
-- [ ] Phase 4: Monte Carlo pricing with standard error and antithetic variates
+- [x] Phase 4: Monte Carlo pricing with standard error and antithetic variates
 - [ ] Phase 5: Implied volatility solver (Newton-Raphson with bisection fallback)
 - [ ] Phase 6: Streamlit demo page with plots
 
@@ -26,8 +26,24 @@ theta(S=100, K=100, T=1, r=0.05, sigma=0.2, option="call")     # -6.414 per year
 crr_price(S=100, K=100, T=1, r=0.05, sigma=0.2, option="put", steps=500, exercise="american")  # 6.09
 ```
 
+Monte Carlo returns the price with its standard error. It is random, so pass `seed=` to make
+a run repeatable. Antithetic variates give a smaller error for the same number of paths.
+(This block is run by `tests/test_readme.py`, so the numbers can't drift from the code.)
+
+```python
+>>> from optionlab import mc_price
+>>> mc_price(S=100, K=100, T=1, r=0.05, sigma=0.2, paths=100_000, seed=42)
+MCResult(price=10.4205..., std_error=0.0467..., paths=100000)
+>>> mc_price(S=100, K=100, T=1, r=0.05, sigma=0.2, paths=100_000, seed=42, antithetic=True)
+MCResult(price=10.4673..., std_error=0.0330..., paths=100000)
+```
+
+Both are within one standard error of the Black-Scholes price, 10.4506. The true price lies
+in `price ± 1.96 * std_error` about 95% of the time.
+
 Conventions: `T` in years; `r`, `sigma`, `q` annualised decimals (0.05 = 5%);
-`option` is `"call"` or `"put"`. Functions accept scalars and numpy arrays.
+`option` is `"call"` or `"put"`. `bs_price` and the Greeks accept scalars and numpy arrays;
+`crr_price` and `mc_price` take scalars only.
 Greeks: vega and rho are per **1.00** change (divide by 100 for per 1%);
 theta is `-dP/dT` **per year** (divide by 365 for per day).
 
@@ -71,6 +87,7 @@ step counts, with an error that falls like 1/N:
 - [Black-Scholes notes](docs/black_scholes_notes.md): intuition behind d1, d2 and risk-neutral pricing
 - [Greeks notes](docs/greeks_notes.md): intuition, scaling conventions, and how the formulas are verified
 - [Binomial tree notes](docs/binomial_notes.md): u, d, p, backward induction, American exercise and convergence
+- [Monte Carlo notes](docs/monte_carlo_notes.md): exact sampling, why the error falls like 1/√N, antithetic variates, and how the standard error is tested
 
 ## Known limitations
 
@@ -87,3 +104,10 @@ step counts, with an error that falls like 1/N:
 - The tree's error shrinks like 1/N but zig-zags between odd and even N: at the default
   N = 500 the at-the-money call above is off by about 0.004 (2 correct decimals).
   10x more steps gives about 10x less error, at 10x the cost.
+- `mc_price` prices European options only and takes scalar inputs. Its result is random unless
+  `seed` is set. The error shrinks like 1/√paths: 10x less error costs 100x more paths.
+- The Monte Carlo standard error is unreliable when fewer than about 1% of paths finish in
+  the money (deep out of the money), and it can even be 0 while the true price is > 0.
+- For σ√T above about 2 (e.g. 200% volatility over one year), a few rare, huge paths carry
+  most of the price. A typical Monte Carlo run then gives a price that is too low and a
+  standard error that is too small. See the [Monte Carlo notes](docs/monte_carlo_notes.md).

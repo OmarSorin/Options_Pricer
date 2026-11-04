@@ -26,9 +26,9 @@ every line in an interview.
 | 1 | Black-Scholes with dividend yield `q` | done |
 | 2 | Greeks: analytic and numerical (bumping) | done |
 | 3 | CRR binomial tree, European and American, plus convergence plot | done |
-| 4 | Monte Carlo with standard error and antithetic variates | **not started** |
+| 4 | Monte Carlo with standard error and antithetic variates | done |
 | 5 | Implied volatility (Newton-Raphson, bisection fallback) | **not started** |
-| 6 | Streamlit demo | **steps 1–2 done** (Pricing, Greeks tabs) |
+| 6 | Streamlit demo | **steps 1–2 done** (Pricing, Greeks tabs, plain-English layer) |
 
 Phase 6 next step (optional, paused): **Step 3, the tree tab.** A live convergence chart
 (tree vs Black-Scholes as N grows) for the sidebar inputs, and American vs European. Also
@@ -41,7 +41,7 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -e ".[dev,validation,plots,app]"   # extras: dev, validation, plots, app
 
-.venv\Scripts\python -m pytest -q                # ~1,450 tests, ~30 s
+.venv\Scripts\python -m pytest -q                # ~1,650 tests, about 1 min (45-105 s seen)
 .venv\Scripts\python -m pytest tests/test_binomial.py -q
 pytest --hypothesis-profile=thorough             # 5,000 examples per property (default 300)
 
@@ -56,12 +56,14 @@ src/optionlab/
   black_scholes.py  bs_price, d1_d2; shared helpers _validate, _validate_option, _as_output
   greeks.py         delta, gamma, vega, theta, rho, numerical_greeks
   binomial.py       crr_price (scalar only; steps, exercise="european"|"american")
+  monte_carlo.py    mc_price -> MCResult(price, std_error, paths) (scalar only; seed, antithetic)
   __init__.py       public exports
 tests/
-  test_black_scholes.py, test_greeks.py, test_binomial.py   unit and reference tests
+  test_black_scholes.py, test_greeks.py, test_binomial.py, test_monte_carlo.py   unit and reference tests
   test_properties.py           hypothesis property tests (profiles in conftest.py)
   test_quantlib_crosscheck.py  skipped if QuantLib is missing
   test_app.py                  Streamlit AppTest smoke tests (skipped if Streamlit is missing)
+  test_readme.py               runs the README's >>> example; checks relative links in README and docs
 app/streamlit_app.py           demo: sidebar inputs, Pricing tab, Greeks tab
 scripts/plot_convergence.py    matplotlib convergence plot, light and dark
 docs/                          *_notes.md intuition notes per phase, convergence PNGs
@@ -110,6 +112,17 @@ docs/                          *_notes.md intuition notes per phase, convergence
   - |error| ≤ Sσ√T/N
   - an envelope log-log slope in [−1.2, −0.8]
   - never assert "the error shrinks at every N", because CRR zig-zags between odd and even N
+- **Monte Carlo** (`mc_price` is random, so everything is "within k standard errors", fixed seeds):
+  - reference values within 4 SE, plain and antithetic
+  - the SE itself: coverage of `price ± 1.96·SE` in [0.93, 0.97] over 1,000 seeds; reported SE
+    within 7% of the actual spread of prices (catches an SE that is too big, like the
+    antithetic pairs bug); log-log slope of SE vs paths in [−0.55, −0.45]
+  - antithetic: `paths` counts payoff evaluations; SE over the paths/2 pair averages;
+    variance-reduction factor > 1 at equal cost (measured 2.01 call, 1.70 put at the money)
+  - QuantLib `MCEuropeanEngine` within 4 combined SE. Its `requiredSamples` counts antithetic
+    *pairs*, so pass `paths / 2`.
+  - hypothesis properties skip < 1% in-the-money cases and σ√T > 2 (rare huge paths dominate,
+    so the price is typically too low and the SE too small). Don't widen the tolerance there.
 - **Mutation testing** uses cosmic-ray (mutmut needs WSL on Windows). Set `PYTHONUTF8=1`,
   or a UnicodeDecodeError shows up as false "incompetent" results.
 
