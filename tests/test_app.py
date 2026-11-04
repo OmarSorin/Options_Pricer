@@ -33,6 +33,23 @@ def test_default_page_shows_library_prices():
     assert metric(at, "Tree, European") == f"{crr_price(100, 100, 1, 0.05, 0.2, steps=500):.4f}"
 
 
+def test_intro_explains_what_an_option_is():
+    at = run_app()
+    assert any("right, but not the obligation" in m.value for m in at.markdown)
+
+
+def test_glossary_expander_is_there():
+    at = run_app()
+    assert any(e.label == "New to options? Start here" for e in at.expander)
+
+
+def test_every_sidebar_input_has_a_help_tooltip():
+    at = run_app()
+    widgets = [at.radio(key="option"), at.number_input(key="S"), at.number_input(key="K")]
+    widgets += [at.slider(key=k) for k in ("T", "r", "sigma", "q")]
+    assert all(w.help for w in widgets)
+
+
 def test_put_shows_american_tree_price():
     at = run_app()
     at.radio(key="option").set_value("put").run()

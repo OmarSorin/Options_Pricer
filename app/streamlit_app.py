@@ -23,6 +23,22 @@ from optionlab import bs_price, crr_price, delta, gamma, numerical_greeks, rho, 
 SERIES = "#2a78d6"  # line colour, the same blue as the convergence plot
 MUTED = "#8a8984"  # reference marks, readable on light and dark backgrounds
 
+GLOSSARY = """
+- **Call**: the right to *buy* the stock at the strike price. It pays off when the stock goes up.
+- **Put**: the right to *sell* the stock at the strike price. It pays off when the stock goes down,
+  a bit like insurance.
+- **Strike price**: the fixed price written into the contract.
+- **Expiry**: the date the option runs out. After that, the right is gone.
+- **Volatility**: how much the stock tends to swing. More swing means a bigger chance of a big
+  payoff, so the option is worth more.
+- **Interest rate**: what risk-free money earns. It matters because paying the strike later
+  is cheaper than paying it today.
+- **Dividend yield**: cash the company pays its shareholders. An option holder doesn't get it,
+  so dividends make calls cheaper and puts dearer.
+- **European vs American**: a European option can only be used on the expiry date; an
+  American one can be used on any day up to it.
+"""
+
 
 def sidebar_inputs() -> dict:
     """Draw the sidebar and return the option's inputs in the library's units.
@@ -30,14 +46,36 @@ def sidebar_inputs() -> dict:
     Rates and volatility are shown in percent because that's how people quote them,
     then divided by 100, because the library takes decimals (0.05 = 5%).
     """
-    st.sidebar.header("Option")
-    option = st.sidebar.radio("Type", ["call", "put"], horizontal=True, key="option")
-    S = st.sidebar.number_input("Spot price S", min_value=0.01, value=100.0, step=1.0, key="S")
-    K = st.sidebar.number_input("Strike K", min_value=0.01, value=100.0, step=1.0, key="K")
-    T = st.sidebar.slider("Time to expiry T (years)", 0.0, 5.0, 1.0, 0.01, key="T")
-    r = st.sidebar.slider("Interest rate r (%)", -2.0, 15.0, 5.0, 0.25, key="r")
-    sigma = st.sidebar.slider("Volatility σ (%)", 0.0, 100.0, 20.0, 0.5, key="sigma")
-    q = st.sidebar.slider("Dividend yield q (%)", 0.0, 10.0, 0.0, 0.25, key="q")
+    sb = st.sidebar
+    sb.header("Your option")
+    option = sb.radio(
+        "Type", ["call", "put"], horizontal=True, key="option",
+        help="A call is the right to BUY the stock at the strike price; a put is the right to SELL it.",
+    )
+    S = sb.number_input(
+        "Stock price today (S)", min_value=0.01, value=100.0, step=1.0, key="S",
+        help="What one share of the stock costs right now.",
+    )
+    K = sb.number_input(
+        "Strike price (K)", min_value=0.01, value=100.0, step=1.0, key="K",
+        help="The fixed price the option lets you buy (call) or sell (put) the stock at.",
+    )
+    T = sb.slider(
+        "Time until expiry, years (T)", 0.0, 5.0, 1.0, 0.01, key="T",
+        help="How long until the option runs out. 0.5 means six months.",
+    )
+    r = sb.slider(
+        "Interest rate (r, %)", -2.0, 15.0, 5.0, 0.25, key="r",
+        help="What a risk-free savings account would pay per year.",
+    )
+    sigma = sb.slider(
+        "Volatility, how much the stock swings (σ, %)", 0.0, 100.0, 20.0, 0.5, key="sigma",
+        help="Roughly how much the stock moves in a typical year. Calm stocks: 15-25%. Wild ones: 50% or more.",
+    )
+    q = sb.slider(
+        "Dividend yield (q, %)", 0.0, 10.0, 0.0, 0.25, key="q",
+        help="The share of the stock price paid out to shareholders each year as dividends.",
+    )
     return dict(S=S, K=K, T=T, r=r / 100, sigma=sigma / 100, q=q / 100, option=option)
 
 
@@ -184,7 +222,14 @@ def greeks_tab(inputs: dict) -> None:
 def main() -> None:
     st.set_page_config(page_title="optionlab", layout="wide")
     st.title("optionlab")
-    st.write("Move the sliders on the left; every number below is recomputed by the library.")
+    st.write(
+        "An **option** is a contract that gives you the right, but not the obligation, to buy "
+        "(a **call**) or sell (a **put**) a stock at a fixed price before a set date. "
+        "This page works out what that right is worth today. "
+        "Change the inputs on the left and every number below updates."
+    )
+    with st.expander("New to options? Start here"):
+        st.markdown(GLOSSARY)
 
     inputs = sidebar_inputs()
     pricing, greeks = st.tabs(["Pricing", "Greeks"])
