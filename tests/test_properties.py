@@ -5,8 +5,9 @@ import numpy as np
 import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
+from scipy.stats import norm
 
-from optionlab import bs_price, delta, gamma, numerical_greeks, rho, theta, vega
+from optionlab import bs_price, d1_d2, delta, gamma, mc_price, numerical_greeks, rho, theta, vega
 
 pytestmark = pytest.mark.filterwarnings("error")
 
@@ -81,3 +82,49 @@ def test_property_analytic_matches_numerical(S, K, T, r, sigma, q, option):
         assert value * to_cash[name] == pytest.approx(
             numeric[name] * to_cash[name], rel=1e-4, abs=1e-6 * (S + K)
         ), name
+
+
+# --- Monte Carlo ------------------------------------------------------------------------
+# A Monte Carlo price is random, so these properties hold "within a few standard errors".
+# Fixed seeds keep every example deterministic; with 5 SE a pure-chance miss has
+# probability about 6e-7 per example.
+
+MC_PATHS = 20_000
+
+
+def assume_enough_paths_in_the_money(S, K, T, r, sigma, q, option):
+    # When fewer than 1% of paths finish in the money, the SE estimate itself is
+    # unreliable (it can be 0 while the true price is > 0), so "within 5 SE" means
+    # nothing there. Deep out-of-the-money options are left to the Black-Scholes tests.
+    _, d2 = d1_d2(S, K, T, r, sigma, q)
+    assume(norm.cdf(d2 if option == "call" else -d2) >= 0.01)
+    # Above sigma*sqrt(T) ~ 2 the stock price at expiry is so skewed (relative variance
+    # e^(sigma^2 T) - 1 > 54) that a few rare, huge paths carry most of the price. A typical
+    # run misses them, so the price comes out too low AND the sample SE is too small.
+    # Example: sigma*sqrt(T) = 4.6, the top 0.01% of paths give 77% of the payoff, and
+    # 2 million paths still give 0.64-0.89 against the true 0.978. This is a limit of plain
+    # Monte Carlo, not a bug; it is listed in the README's Known limitations.
+    assume(sigma * np.sqrt(T) <= 2)
+
+
+@SETTINGS
+@given(spot, strike, expiry, rate, vol, div, option_type, st.booleans())
+def test_property_monte_carlo_matches_black_scholes(S, K, T, r, sigma, q, option, antithetic):
+    assume_enough_paths_in_the_money(S, K, T, r, sigma, q, option)
+    result = mc_price(S, K, T, r, sigma, q, option, paths=MC_PATHS, seed=0, antithetic=antithetic)
+    exact = bs_price(S, K, T, r, sigma, q, option)
+    assert abs(result.price - exact) <= 5 * result.std_error, (result, exact)
+
+
+@SETTINGS
+@given(spot, strike, expiry, rate, vol, div)
+def test_property_monte_carlo_put_call_parity(S, K, T, r, sigma, q):
+    assume_enough_paths_in_the_money(S, K, T, r, sigma, q, "call")
+    assume_enough_paths_in_the_money(S, K, T, r, sigma, q, "put")
+    # DIFFERENT seeds for the call and the put. With the same draws they would be
+    # negatively correlated, and sqrt(SE_c^2 + SE_p^2) would understate the error of C - P.
+    call = mc_price(S, K, T, r, sigma, q, "call", paths=MC_PATHS, seed=1)
+    put = mc_price(S, K, T, r, sigma, q, "put", paths=MC_PATHS, seed=2)
+    forward_value = S * np.exp(-q * T) - K * np.exp(-r * T)
+    combined_se = np.hypot(call.std_error, put.std_error)
+    assert abs((call.price - put.price) - forward_value) <= 5 * combined_se
