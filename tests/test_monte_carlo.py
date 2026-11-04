@@ -57,11 +57,12 @@ def test_standard_error_is_the_expected_size():
 BS_REF = 10.4506
 
 
+@pytest.mark.parametrize("antithetic", [False, True])
 @pytest.mark.parametrize(
     "q, option, true_price",
     [(0.0, "call", BS_REF), (0.02, "put", 6.3301)],
 )
-def test_95_percent_intervals_contain_the_true_price_95_percent_of_the_time(q, option, true_price):
+def test_95_percent_intervals_contain_the_true_price_95_percent_of_the_time(q, option, true_price, antithetic):
     # If the SE is right, price ± 1.96 SE contains the true price in 95% of runs. Over 1,000
     # runs the share has noise of sqrt(0.95 * 0.05 / 1000) ≈ 0.007 (binomial), so [0.93, 0.97]
     # is about ±3 standard deviations. An SE that is 10% too small covers only ~92.5% and
@@ -69,10 +70,24 @@ def test_95_percent_intervals_contain_the_true_price_95_percent_of_the_time(q, o
     runs = 1_000
     hits = 0
     for seed in range(runs):
-        result = mc_price(**REF, q=q, option=option, paths=10_000, seed=seed)
+        result = mc_price(**REF, q=q, option=option, paths=10_000, seed=seed, antithetic=antithetic)
         hits += abs(result.price - true_price) <= 1.96 * result.std_error
     coverage = hits / runs
     assert 0.93 <= coverage <= 0.97, f"coverage {coverage:.3f}"
+
+
+@pytest.mark.parametrize("antithetic", [False, True])
+@pytest.mark.parametrize("option", ["call", "put"])
+def test_reported_se_matches_the_actual_spread_of_prices(option, antithetic):
+    # The most direct check of the SE: run the pricer 1,000 times with different seeds and
+    # measure how much the price ACTUALLY varies. The reported SE should match that spread.
+    # Unlike coverage, this catches an SE that is too big as easily as one that is too small.
+    # With 1,000 runs the measured spread is itself uncertain by about 1/sqrt(2*1000) ≈ 2.2%,
+    # so the ratio must lie within [0.93, 1.07] (about ±3 standard deviations).
+    results = [mc_price(**REF, option=option, paths=10_000, seed=s, antithetic=antithetic) for s in range(1_000)]
+    actual_spread = np.std([r.price for r in results], ddof=1)
+    reported = np.mean([r.std_error for r in results])
+    assert 0.93 <= reported / actual_spread <= 1.07, f"reported {reported:.5f}, actual {actual_spread:.5f}"
 
 
 def test_standard_error_shrinks_like_one_over_sqrt_paths():
@@ -82,6 +97,38 @@ def test_standard_error_shrinks_like_one_over_sqrt_paths():
     errors = [mc_price(**REF, paths=int(n), seed=11).std_error for n in paths]
     slope = np.polyfit(np.log(paths), np.log(errors), 1)[0]
     assert -0.55 <= slope <= -0.45, f"fitted slope {slope:.3f}"
+
+
+# --- Antithetic variates ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "q, option, true_price",
+    [(0.0, "call", 10.4506), (0.02, "call", 9.2270), (0.02, "put", 6.3301)],
+)
+def test_antithetic_reference_values_within_4_standard_errors(q, option, true_price):
+    result = mc_price(**REF, q=q, option=option, paths=200_000, seed=42, antithetic=True)
+    assert within_4_se(result, true_price), result
+
+
+@pytest.mark.parametrize("option", ["call", "put"])
+def test_antithetic_reduces_variance_at_equal_cost(option):
+    # Same number of payoff evaluations (paths) in both runs, so the comparison is fair.
+    # Variance-reduction factor = (SE_plain / SE_antithetic)^2: how many times more plain
+    # paths you would need to match the antithetic error.
+    plain = mc_price(**REF, option=option, paths=100_000, seed=5)
+    anti = mc_price(**REF, option=option, paths=100_000, seed=5, antithetic=True)
+    assert anti.paths == plain.paths
+    factor = (plain.std_error / anti.std_error) ** 2
+    assert factor > 1, f"variance-reduction factor {factor:.2f}"
+
+
+@pytest.mark.parametrize("paths", [3, 1001, 2])
+def test_antithetic_needs_an_even_number_of_paths_at_least_4(paths):
+    # paths counts payoff evaluations: each draw Z is used twice (Z and -Z), so paths must be
+    # even; and the SE needs at least 2 pairs.
+    with pytest.raises(ValueError, match="even number of paths >= 4"):
+        mc_price(**REF, paths=paths, seed=0, antithetic=True)
 
 
 # --- Reproducibility --------------------------------------------------------------------

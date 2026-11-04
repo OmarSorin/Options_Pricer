@@ -17,6 +17,16 @@ The only error left is statistical. Its size is measured by the standard error,
 
 so the true price lies within price ± 1.96 * SE about 95% of the time. Halving the error
 costs four times as many paths.
+
+Antithetic variates (antithetic=True) reduce the error for free: every draw Z is used twice,
+as Z and as -Z. When Z gives a high stock price, -Z gives a low one, so the two payoffs tend
+to move in opposite directions and their average is less noisy than two independent payoffs.
+For calls and puts this always helps, because the payoff only goes one way as Z grows
+(it is monotone in Z), which makes the covariance of f(Z) and f(-Z) negative.
+
+The two payoffs of a pair are NOT independent, so the standard error must be computed from
+the pair averages (n/2 independent numbers), never from all n payoffs as if they were
+independent. The latter is a classic bug: it gets the price right and the error wrong.
 """
 
 from __future__ import annotations
@@ -37,7 +47,7 @@ class MCResult(NamedTuple):
     paths: int
 
 
-def _validate_mc_args(paths: int, *inputs: ArrayLike) -> None:
+def _validate_mc_args(paths: int, antithetic: bool, *inputs: ArrayLike) -> None:
     """Checks specific to Monte Carlo, on top of the usual Black-Scholes input rules."""
     if any(np.ndim(x) != 0 for x in inputs):
         raise ValueError("mc_price accepts scalar inputs only; use a loop to price many options.")
@@ -45,6 +55,9 @@ def _validate_mc_args(paths: int, *inputs: ArrayLike) -> None:
     # At least 2 paths, because the sample standard deviation needs two values.
     if isinstance(paths, bool) or not isinstance(paths, (int, np.integer)) or paths < 2:
         raise ValueError(f"paths must be an integer >= 2, got {paths!r}.")
+    # Antithetic: each draw is used twice, and the SE needs at least two pairs.
+    if antithetic and (paths % 2 != 0 or paths < 4):
+        raise ValueError(f"antithetic=True needs an even number of paths >= 4, got {paths}.")
 
 
 def mc_price(
@@ -57,6 +70,7 @@ def mc_price(
     option: str = "call",
     paths: int = 100_000,
     seed: int | None = None,
+    antithetic: bool = False,
 ) -> MCResult:
     """Price a European call or put by Monte Carlo simulation.
 
@@ -64,10 +78,14 @@ def mc_price(
 
     Args:
         option: "call" or "put".
-        paths: number of simulated stock prices at expiry (an integer >= 2). The standard
-            error shrinks like 1 / sqrt(paths).
+        paths: number of simulated stock prices at expiry, i.e. payoff evaluations (an
+            integer >= 2). The standard error shrinks like 1 / sqrt(paths). With antithetic
+            variates it counts both halves of each pair, so plain and antithetic runs with
+            the same `paths` cost the same.
         seed: seed for numpy's random generator. The same seed gives exactly the same result;
             None gives a different result every call.
+        antithetic: if True, use paths / 2 draws Z, each as Z and -Z (see the module notes).
+            Needs an even number of paths >= 4.
 
     Returns:
         MCResult(price, std_error, paths). The true price is within price ± 1.96 * std_error
@@ -79,22 +97,31 @@ def mc_price(
 
     Raises:
         ValueError: on invalid inputs (as `bs_price`), array inputs, unknown option type,
-            or paths not an integer >= 2.
+            paths not an integer >= 2, or (with antithetic=True) paths odd or < 4.
     """
     # 1. Validate: Monte Carlo rules first, then the same rules as bs_price.
     _validate_option(option)
-    _validate_mc_args(paths, S, K, T, r, sigma, q)
+    _validate_mc_args(paths, antithetic, S, K, T, r, sigma, q)
     S, K, T, r, sigma, q = (float(x) for x in _validate(S, K, T, r, sigma, q))
 
-    # 2. Simulate the stock price at expiry, exactly, from standard normal draws Z.
-    rng = np.random.default_rng(seed)
-    Z = rng.standard_normal(paths)
-    stock_at_expiry = S * np.exp((r - q - 0.5 * sigma**2) * T + sigma * np.sqrt(T) * Z)
+    def discounted_payoff(Z: np.ndarray) -> np.ndarray:
+        """Simulate the stock price at expiry exactly from draws Z, and discount its payoff."""
+        stock_at_expiry = S * np.exp((r - q - 0.5 * sigma**2) * T + sigma * np.sqrt(T) * Z)
+        payoff = np.maximum(stock_at_expiry - K, 0.0) if option == "call" else np.maximum(K - stock_at_expiry, 0.0)
+        return np.exp(-r * T) * payoff
 
-    # 3. Discounted payoffs, then their average (the price) and its standard error.
-    payoff = np.maximum(stock_at_expiry - K, 0.0) if option == "call" else np.maximum(K - stock_at_expiry, 0.0)
-    discounted = np.exp(-r * T) * payoff
-    price = discounted.mean()
-    std_error = discounted.std(ddof=1) / np.sqrt(paths)  # ddof=1: the sample (unbiased) variance
+    # 2. Draw standard normals and turn them into independent samples of the discounted payoff.
+    rng = np.random.default_rng(seed)
+    if antithetic:
+        Z = rng.standard_normal(paths // 2)
+        # One sample per PAIR: the average of the payoffs at Z and at -Z.
+        samples = 0.5 * (discounted_payoff(Z) + discounted_payoff(-Z))
+    else:
+        samples = discounted_payoff(rng.standard_normal(paths))
+
+    # 3. Price = average of the samples; SE = their spread / sqrt(number of samples).
+    #    For antithetic runs that number is paths / 2 (the pairs), not paths.
+    price = samples.mean()
+    std_error = samples.std(ddof=1) / np.sqrt(len(samples))  # ddof=1: the sample (unbiased) variance
 
     return MCResult(float(price), float(std_error), int(paths))
