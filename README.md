@@ -47,6 +47,9 @@ The convergence plot is regenerated with `pip install -e ".[plots]"` and
 
 A Streamlit page to play with the pricers in the browser: set S, K, T, r, σ, q and the
 number of tree steps, and compare Black-Scholes with the European and American tree.
+It is written for non-experts too: a glossary, plain-English sentences that update with the
+inputs ("if the stock rises $1, the option's price goes up by about $0.64"), and the technical
+details (tree steps, analytic vs numerical Greeks) under "Show the maths".
 
 ```bash
 pip install -e ".[app]"

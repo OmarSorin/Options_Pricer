@@ -116,6 +116,25 @@ def test_greeks_table_shows_library_values():
     assert table.loc["Theta", "As usually quoted"] == pytest.approx(theta(*args) / 365)
 
 
+def test_greek_sentences_for_a_call():
+    text = markdown_text(run_app())
+    args = (100, 100, 1, 0.05, 0.2)
+    assert f"the option's price goes up by about **${delta(*args):.2f}**" in text  # 0.64
+    # theta is -dP/dT per year and negative here: the option loses value each day.
+    assert f"the option loses about **${abs(theta(*args)) / 365:.3f}**" in text  # 0.018
+
+
+def test_greek_sentences_flip_for_a_put():
+    at = run_app()
+    at.radio(key="option").set_value("put").run()
+    assert f"the option's price goes down by about **${abs(delta(100, 100, 1, 0.05, 0.2, option='put')):.2f}**" in markdown_text(at)
+
+
+def test_greeks_table_is_under_show_the_maths():
+    at = run_app()
+    assert sum(e.label == "Show the maths" for e in at.expander) == 2  # one per tab
+
+
 def test_greeks_tab_draws_six_charts():
     at = run_app()
     assert len(at.get("vega_lite_chart")) == 6  # price + five Greeks

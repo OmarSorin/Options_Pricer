@@ -201,7 +201,7 @@ def spot_chart(df: pd.DataFrame, column: str, title: str, spot: float) -> alt.La
     Hovering anywhere snaps to the nearest S on the curve and shows its value.
     """
     hover = alt.selection_point(fields=["S"], nearest=True, on="pointerover", empty=False)
-    base = alt.Chart(df).encode(x=alt.X("S:Q", title="Spot S"))
+    base = alt.Chart(df).encode(x=alt.X("S:Q", title="Stock price"))
     line = base.mark_line(color=SERIES, strokeWidth=2).encode(y=alt.Y(f"{column}:Q", title=None))
     points = (
         base.mark_point(color=SERIES, filled=True, size=60)
@@ -216,8 +216,46 @@ def spot_chart(df: pd.DataFrame, column: str, title: str, spot: float) -> alt.La
     return (line + points + today).properties(title=title, height=220)
 
 
+def up_or_down(x: float) -> str:
+    return "goes up" if x >= 0 else "goes down"
+
+
+def greek_sentences(exact: dict, inputs: dict) -> list[str]:
+    """One plain-English sentence per Greek, with the numbers in the usual trading units.
+
+    The /100 and /365 conversions come from GREEK_UNITS, so they live in one place.
+    """
+    quoted = {name: exact[name] / GREEK_UNITS[name][2] for name in GREEK_UNITS}
+    d, g, v, th, rh = (quoted[n] for n in ("delta", "gamma", "vega", "theta", "rho"))
+    sigma_pct, r_pct = 100 * inputs["sigma"], 100 * inputs["r"]
+    # theta is -dP/dT: the change in price as one day passes. Usually negative (time value melts).
+    loses_or_gains = "loses" if th < 0 else "gains"
+    return [
+        f"**Delta:** if the stock rises $1, the option's price {up_or_down(d)} by about **${abs(d):.2f}**.",
+        f"**Gamma:** after that $1 rise, delta itself moves from {d:.2f} to about {d + g:.2f}, "
+        "so the next $1 has a slightly different effect.",
+        f"**Vega:** if volatility rises 1 point ({sigma_pct:g}% → {sigma_pct + 1:g}%), "
+        f"the price {up_or_down(v)} by about **${abs(v):.2f}**.",
+        f"**Theta:** each day that passes, the option {loses_or_gains} about **${abs(th):.3f}** "
+        "(if nothing else changes).",
+        f"**Rho:** if interest rates rise 1 point ({r_pct:g}% → {r_pct + 1:g}%), "
+        f"the price {up_or_down(rh)} by about **${abs(rh):.2f}**.",
+    ]
+
+
+# Plain chart titles, in the usual trading units (the same units as the sentences).
+CHART_TITLES = {
+    "price": "Option price",
+    "delta": "Delta: price change per $1 stock move",
+    "gamma": "Gamma: change in delta per $1 stock move",
+    "vega": "Vega: price change per 1 vol point",
+    "theta": "Theta: price change per day",
+    "rho": "Rho: price change per 1% rate rise",
+}
+
+
 def greeks_tab(inputs: dict) -> None:
-    st.subheader("Greeks (Black-Scholes)")
+    st.subheader("How the price reacts when one thing changes")
     try:
         exact = analytic_greeks(**inputs)
         bumped = numerical_greeks(**inputs)
@@ -225,7 +263,11 @@ def greeks_tab(inputs: dict) -> None:
         st.error(str(err))
         return
 
+    st.markdown("\n".join(f"- {s}" for s in greek_sentences(exact, inputs)))
+    st.caption("Traders call these sensitivities the *Greeks*. Each one changes a single input and keeps the rest fixed.")
+
     # 1. Table: analytic vs finite-difference values, plus the usual trading units.
+    maths = st.expander("Show the maths")
     rows = []
     for name, (label, unit, divisor, quoted_unit) in GREEK_UNITS.items():
         rows.append(
@@ -238,12 +280,12 @@ def greeks_tab(inputs: dict) -> None:
                 "Quoted unit": quoted_unit,
             }
         )
-    st.dataframe(
+    maths.dataframe(
         pd.DataFrame(rows),
         hide_index=True,
         column_config={c: st.column_config.NumberColumn(format="%.6f") for c in ("Analytic", "Numerical (bumping)", "As usually quoted")},
     )
-    st.caption(
+    maths.caption(
         "Analytic = the closed-form formulas. Numerical = reprice with `bs_price` after a small bump "
         "(central differences). They should agree to about 5 digits; for very short expiries or low "
         "volatility (σ√T below about 0.05) the numerical gamma gets noisy."
@@ -253,12 +295,15 @@ def greeks_tab(inputs: dict) -> None:
     S, K = inputs["S"], inputs["K"]
     spots = np.linspace(min(0.5 * K, 0.8 * S), max(1.5 * K, 1.2 * S), 201)
     others = {k: v for k, v in inputs.items() if k != "S"}
-    df = pd.DataFrame({"S": spots, "price": bs_price(spots, **others), **analytic_greeks(spots, **others)})
+    greeks_quoted = {name: values / GREEK_UNITS[name][2] for name, values in analytic_greeks(spots, **others).items()}
+    df = pd.DataFrame({"S": spots, "price": bs_price(spots, **others), **greeks_quoted})
 
-    titles = {"price": "Price"} | {name: f"{label} ({unit})" for name, (label, unit, *_) in GREEK_UNITS.items()}
-    st.caption(f"Each chart varies S and keeps K, T, r, σ, q fixed. The dashed line is today's S = {S:g}.")
+    st.caption(
+        f"What if the stock price were different? Each chart moves the stock price and keeps everything "
+        f"else fixed. The dashed line is today's price, ${S:,.2f}."
+    )
     columns = st.columns(3)
-    for i, (column, title) in enumerate(titles.items()):
+    for i, (column, title) in enumerate(CHART_TITLES.items()):
         columns[i % 3].altair_chart(spot_chart(df, column, title, S), width="stretch")
 
 
@@ -275,7 +320,7 @@ def main() -> None:
         st.markdown(GLOSSARY)
 
     inputs = sidebar_inputs()
-    pricing, greeks = st.tabs(["Pricing", "Greeks"])
+    pricing, greeks = st.tabs(["Pricing", "Sensitivities (Greeks)"])
     with pricing:
         pricing_tab(inputs)
     with greeks:
