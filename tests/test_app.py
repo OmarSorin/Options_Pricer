@@ -25,12 +25,47 @@ def metric(at: AppTest, label: str) -> str:
     return next(m.value for m in at.metric if m.label == label)
 
 
+BS_LABEL = "Fair price (Black-Scholes)"
+EURO_LABEL = "Step-by-step model, European"
+AMER_LABEL = "Step-by-step model, American (can exercise early)"
+
+
+def markdown_text(at: AppTest) -> str:
+    return "\n".join(m.value for m in at.markdown)
+
+
 def test_default_page_shows_library_prices():
     at = run_app()
     assert not at.exception
     # Defaults are the Phase 1 reference option: S = K = 100, T = 1, r = 5%, sigma = 20%, call.
-    assert metric(at, "Black-Scholes (European)") == f"{bs_price(100, 100, 1, 0.05, 0.2):.4f}" == "10.4506"
-    assert metric(at, "Tree, European") == f"{crr_price(100, 100, 1, 0.05, 0.2, steps=500):.4f}"
+    assert metric(at, BS_LABEL) == f"{bs_price(100, 100, 1, 0.05, 0.2):.4f}" == "10.4506"
+    assert metric(at, EURO_LABEL) == f"{crr_price(100, 100, 1, 0.05, 0.2, steps=500):.4f}"
+
+
+def test_headline_states_the_fair_price_in_words():
+    text = markdown_text(run_app())
+    assert "A **call** lets you buy the stock at **$100.00**" in text
+    assert "about **$10.45** per share" in text
+
+
+def test_early_exercise_sentence_for_a_put():
+    at = run_app()
+    at.radio(key="option").set_value("put").run()
+    euro = crr_price(100, 100, 1, 0.05, 0.2, option="put", steps=500)
+    amer = crr_price(100, 100, 1, 0.05, 0.2, option="put", steps=500, exercise="american")
+    assert f"worth about **${amer - euro:.2f}** extra" in markdown_text(at)
+
+
+def test_early_exercise_sentence_for_a_call_without_dividends():
+    # Without dividends, early exercise of a call never pays off, so American = European.
+    assert "never pays off" in markdown_text(run_app())
+
+
+def test_tree_steps_slider_lives_in_show_the_maths():
+    at = run_app()
+    assert any(e.label == "Show the maths" for e in at.expander)
+    at.slider(key="steps").set_value(50).run()
+    assert metric(at, EURO_LABEL) == f"{crr_price(100, 100, 1, 0.05, 0.2, steps=50):.4f}"
 
 
 def test_intro_explains_what_an_option_is():
@@ -55,7 +90,7 @@ def test_put_shows_american_tree_price():
     at.radio(key="option").set_value("put").run()
     assert not at.exception
     expected = crr_price(100, 100, 1, 0.05, 0.2, option="put", steps=500, exercise="american")
-    assert metric(at, "Tree, American") == f"{expected:.4f}"
+    assert metric(at, AMER_LABEL) == f"{expected:.4f}"
 
 
 def test_library_error_is_shown_not_raised():
@@ -64,7 +99,7 @@ def test_library_error_is_shown_not_raised():
     assert not at.exception
     assert any("sigma must be > 0" in e.value for e in at.error)
     # Black-Scholes is still fine at sigma == 0, so its price is still shown.
-    assert metric(at, "Black-Scholes (European)") != "n/a"
+    assert metric(at, BS_LABEL) != "n/a"
 
 
 def greeks_table(at: AppTest):

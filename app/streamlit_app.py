@@ -23,6 +23,10 @@ from optionlab import bs_price, crr_price, delta, gamma, numerical_greeks, rho, 
 SERIES = "#2a78d6"  # line colour, the same blue as the convergence plot
 MUTED = "#8a8984"  # reference marks, readable on light and dark backgrounds
 
+BS_LABEL = "Fair price (Black-Scholes)"
+EURO_LABEL = "Step-by-step model, European"
+AMER_LABEL = "Step-by-step model, American (can exercise early)"
+
 GLOSSARY = """
 - **Call**: the right to *buy* the stock at the strike price. It pays off when the stock goes up.
 - **Put**: the right to *sell* the stock at the strike price. It pays off when the stock goes down,
@@ -91,40 +95,79 @@ def try_price(pricer: Callable[..., float], **kwargs) -> tuple[float | None, str
         return None, str(err)
 
 
+def years_in_words(T: float) -> str:
+    """1 -> "1 year", 0.5 -> "0.5 years", 0 -> "right now"."""
+    if T == 0:
+        return "right now"
+    return f"{T:g} year" if T == 1 else f"{T:g} years"
+
+
 def pricing_tab(inputs: dict) -> None:
-    st.subheader("Prices")
-    steps = st.slider("Tree steps N", 1, 2000, 500, key="steps")
+    st.subheader("What is this option worth?")
+
+    # Streamlit draws elements in script order, but the steps slider (inside "Show the maths",
+    # at the bottom) must be read BEFORE we can price. So we reserve empty spots on the page
+    # first, draw the slider, then fill the reserved spots.
+    headline = st.container()
+    metrics = st.container()
+    maths = st.expander("Show the maths")
+    steps = maths.slider(
+        "Tree steps N", 1, 2000, 500, key="steps",
+        help="More steps make the step-by-step model more accurate, but slower.",
+    )
 
     bs, bs_err = try_price(bs_price, **inputs)
     euro, euro_err = try_price(crr_price, **inputs, steps=steps, exercise="european")
     amer, amer_err = try_price(crr_price, **inputs, steps=steps, exercise="american")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Black-Scholes (European)", f"{bs:.4f}" if bs is not None else "n/a")
-    col2.metric(
-        "Tree, European",
-        f"{euro:.4f}" if euro is not None else "n/a",
-        # The gap to Black-Scholes is the tree's error; it shrinks like 1/N.
-        delta=f"{euro - bs:+.4f} vs Black-Scholes" if euro is not None and bs is not None else None,
-        delta_color="off",
-    )
-    col3.metric(
-        "Tree, American",
-        f"{amer:.4f}" if amer is not None else "n/a",
-        # The gap between the two trees is what the right to exercise early is worth.
-        delta=f"{amer - euro:+.4f} early-exercise premium" if amer is not None and euro is not None else None,
-        delta_color="off",
-    )
+    option, S, K, T = inputs["option"], inputs["S"], inputs["K"], inputs["T"]
+    verb = "buy" if option == "call" else "sell"
+    if bs is not None:
+        headline.markdown(
+            f"A **{option}** lets you {verb} the stock at **${K:,.2f}** within **{years_in_words(T)}**. "
+            f"A fair price for that right today is about **${bs:,.2f}** per share."
+        )
+        headline.caption("$ stands for whatever currency the stock is priced in.")
+
+    col1, col2, col3 = metrics.columns(3)
+    col1.metric(BS_LABEL, f"{bs:.4f}" if bs is not None else "n/a")
+    col2.metric(EURO_LABEL, f"{euro:.4f}" if euro is not None else "n/a")
+    col3.metric(AMER_LABEL, f"{amer:.4f}" if amer is not None else "n/a")
 
     for message in dict.fromkeys(m for m in (bs_err, euro_err, amer_err) if m):  # each message once
-        st.error(message)
+        metrics.error(message)
+
+    # The gap between the two trees is what the right to exercise early is worth.
+    if amer is not None and euro is not None:
+        premium = amer - euro
+        if premium >= 0.005:  # at least half a cent, so it shows as $0.01 or more
+            metrics.markdown(f"Being allowed to use it early is worth about **${premium:,.2f}** extra here.")
+        elif option == "call" and inputs["q"] == 0:
+            metrics.markdown(
+                "Being allowed to use it early is worth nothing here: for a call on a stock that "
+                "pays no dividends, using it early never pays off, so American = European."
+            )
+        else:
+            metrics.markdown("Being allowed to use it early is worth almost nothing here.")
 
     if bs is not None:
-        S, K = inputs["S"], inputs["K"]
-        intrinsic = max(S - K, 0.0) if inputs["option"] == "call" else max(K - S, 0.0)
-        st.caption(
-            f"Intrinsic value (exercise now): {intrinsic:.4f}. "
-            f"Time value (Black-Scholes minus intrinsic): {bs - intrinsic:.4f}."
+        intrinsic = max(S - K, 0.0) if option == "call" else max(K - S, 0.0)
+        metrics.caption(
+            f"If you used it right now you'd get ${intrinsic:,.2f} (its *intrinsic value*); "
+            f"the other ${bs - intrinsic:,.2f} is what you pay for time and uncertainty (its *time value*)."
+        )
+
+    # Technical detail for the curious, under "Show the maths".
+    maths.markdown(
+        "- **Black-Scholes** is an exact formula for options that can only be used at expiry (European).\n"
+        "- The **step-by-step model** is a Cox-Ross-Rubinstein binomial tree: it splits the time into N "
+        "steps where the stock goes up or down, and works backwards from expiry. It also handles "
+        "American options, which have no exact formula."
+    )
+    if euro is not None and bs is not None:
+        maths.caption(
+            f"With N = {steps}, the European tree is off from Black-Scholes by {euro - bs:+.4f}. "
+            "That error shrinks roughly like 1/N, zig-zagging between odd and even N."
         )
 
 
