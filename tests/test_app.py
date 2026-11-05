@@ -150,7 +150,8 @@ def test_greeks_error_at_expiry_is_shown_not_raised():
 
 # --- Monte Carlo tab --------------------------------------------------------------------
 
-MC_LABEL = "Simulated price (Monte Carlo)"
+MC_LABEL = "Simulated price"
+RANGE_LABEL = "Likely range (95% sure)"
 
 
 def reference_mc(**kwargs):
@@ -166,7 +167,7 @@ def test_monte_carlo_tab_shows_library_price_and_range():
     assert metric(at, MC_LABEL) == f"{result.price:.4f}"
     half_width = 1.96 * result.std_error
     assert f"give or take **${half_width:.2f}**" in markdown_text(at)
-    assert metric(at, "95% range") == f"{result.price - half_width:.2f} – {result.price + half_width:.2f}"
+    assert metric(at, RANGE_LABEL) == f"{result.price - half_width:.2f} – {result.price + half_width:.2f}"
 
 
 def test_antithetic_toggle_narrows_the_range():
@@ -197,4 +198,11 @@ def test_heavy_tail_warning_only_when_sigma_sqrt_t_above_2():
 def test_deep_out_of_the_money_warning():
     at = run_app()
     at.number_input(key="K").set_value(300.0).run()  # call far above the spot: P(in the money) << 1%
-    assert any("Almost no simulated futures end in the money" in w.value for w in at.warning)
+    assert any("Almost none of the simulated futures" in w.value for w in at.warning)
+
+
+def test_monte_carlo_tab_explains_itself_in_plain_words():
+    text = markdown_text(run_app())
+    assert "rolling dice" in text  # the analogy in the intro
+    assert "Why a range?" in text
+    assert "Things to try" in text

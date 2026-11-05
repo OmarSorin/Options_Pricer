@@ -308,7 +308,8 @@ def greeks_tab(inputs: dict) -> None:
         columns[i % 3].altair_chart(spot_chart(df, column, title, S), width="stretch")
 
 
-MC_LABEL = "Simulated price (Monte Carlo)"
+MC_LABEL = "Simulated price"
+RANGE_LABEL = "Likely range (95% sure)"
 MC_PATH_CHOICES = [1_000, 10_000, 100_000, 1_000_000]
 
 
@@ -319,30 +320,34 @@ def in_the_money_probability(S, K, T, r, sigma, q, option) -> float:
 
 
 def monte_carlo_tab(inputs: dict) -> None:
-    st.subheader("Simulate many possible futures, then average")
+    st.subheader("Guess the price by imagining thousands of futures")
     st.write(
-        "Instead of a formula, Monte Carlo **simulates** thousands of random prices the stock "
-        "could have at expiry, works out what the option pays in each, and averages them. "
-        "The answer is a little different every run, so it comes with a range."
+        "Nobody knows where the stock will be when the option expires. So the computer does "
+        "something like **rolling dice** thousands of times: each roll is one possible future "
+        "stock price. For each future it works out what the option would pay, then takes the "
+        "average, adjusted for interest. That average is a fair price for the option today. "
+        "This method is called **Monte Carlo**, after the casino."
     )
 
-    # Same trick as the Pricing tab: reserve the result's spot first, then draw the controls.
     controls = st.columns(2)
     paths = controls[0].select_slider(
-        "Number of simulations", MC_PATH_CHOICES, value=100_000, key="mc_paths",
+        "How many futures to imagine", MC_PATH_CHOICES, value=100_000, key="mc_paths",
         format_func=lambda n: f"{n:,}",
-        help="More simulations give a narrower range, but slowly: 100× more makes it only 10× narrower.",
+        help="More futures give a more precise answer, but slowly: 100× more makes the range only 10× narrower.",
     )
     antithetic = controls[1].toggle(
-        "Use mirror-image pairs (antithetic variates)", key="mc_antithetic",
-        help="Use every random draw twice, once as-is and once flipped. Up and down outcomes "
-        "balance out, so the range gets narrower at no extra cost.",
+        "Pair every future with its opposite", key="mc_antithetic",
+        help="For every imagined rise, also imagine the matching fall. Lucky and unlucky rolls "
+        "cancel out, so the answer is more precise for the same amount of work. "
+        "Experts call this 'antithetic variates'.",
     )
+    # Reserve the result's spot now, so it shows above "Show the maths" (whose seed we need first).
     result_area = st.container()
     maths = st.expander("Show the maths")
     seed = int(maths.number_input(
         "Random seed", min_value=0, value=42, step=1, key="mc_seed",
-        help="The same seed gives exactly the same simulation. Change it to see another run.",
+        help="Fixes the dice rolls: the same seed always imagines exactly the same futures. "
+        "Change it for a fresh set.",
     ))
 
     result = mc_price(**inputs, paths=paths, seed=seed, antithetic=antithetic)
@@ -351,29 +356,44 @@ def monte_carlo_tab(inputs: dict) -> None:
     low, high = result.price - half_width, result.price + half_width
 
     result_area.markdown(
-        f"Simulating **{paths:,}** possible futures for the stock gives a price of about "
-        f"**${result.price:,.2f}**, give or take **${half_width:.2f}** "
-        f"(95% range ${low:,.2f} – ${high:,.2f}). The exact formula says **${exact:,.2f}**."
+        f"After imagining **{paths:,}** futures, the option is worth about "
+        f"**${result.price:,.2f}**, give or take **${half_width:.2f}**. "
+        f"The exact formula says **${exact:,.2f}**."
     )
     col1, col2, col3 = result_area.columns(3)
     col1.metric(MC_LABEL, f"{result.price:.4f}")
-    col2.metric("95% range", f"{low:.2f} – {high:.2f}")
-    col3.metric("Exact price (Black-Scholes)", f"{exact:.4f}")
+    col2.metric(RANGE_LABEL, f"{low:.2f} – {high:.2f}")
+    col3.metric("Exact price (formula)", f"{exact:.4f}")
     if low <= exact <= high:
-        result_area.markdown("The exact price is inside the 95% range ✓")
+        result_area.success("The exact price falls inside the likely range, as it should most of the time.")
     else:
-        result_area.markdown("The exact price is outside the 95% range. That happens about 1 time in 20 by chance; try another seed.")
+        result_area.info(
+            "This time the exact price falls just outside the likely range. That's expected about "
+            "1 time in 20, like a run of bad luck at dice. Try another seed."
+        )
 
-    # The two limits documented in docs/monte_carlo_notes.md.
+    result_area.markdown(
+        "**Why a range?** Different dice rolls give slightly different answers. The range shows "
+        "how far off this answer could be: in 95 out of 100 runs, the true price lies inside it."
+    )
+    result_area.markdown(
+        "**Things to try:**\n"
+        "- Imagine fewer futures (1,000): the range gets much wider.\n"
+        "- Switch on *Pair every future with its opposite*: the range shrinks for free.\n"
+        "- Change the random seed under *Show the maths*: a new set of futures, a slightly different answer."
+    )
+
+    # The two limits documented in docs/monte_carlo_notes.md, in plain words.
     if inputs["sigma"] * np.sqrt(inputs["T"]) > 2:
         result_area.warning(
-            "With this much volatility over this long, a few rare, huge outcomes carry most of "
-            "the price. The simulation will usually come out too low, and its range too narrow."
+            "Careful: with this much volatility over this much time, the price depends on a few "
+            "rare, huge outcomes (a stock that rockets up). Most runs never imagine them, so the "
+            "simulated price usually comes out too low, and the range looks more precise than it is."
         )
     if in_the_money_probability(**inputs) < 0.01:
         result_area.warning(
-            "Almost no simulated futures end in the money, so the range is unreliable "
-            "(it can even be zero while the true price is not)."
+            "Almost none of the simulated futures end with the option paying anything, so the "
+            "range can't be trusted. It can even show $0.00 while the real price isn't zero."
         )
 
 
