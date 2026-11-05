@@ -1,7 +1,8 @@
 # optionlab
 
-A Python library for pricing European and American options with several models
-and computing the Greeks. Built as a learning project in derivatives pricing.
+A Python library for pricing European and American options with several models,
+computing the Greeks, and finding implied volatility. Built as a learning project in
+derivatives pricing.
 
 ## Roadmap
 
@@ -9,7 +10,7 @@ and computing the Greeks. Built as a learning project in derivatives pricing.
 - [x] Phase 2: Greeks, analytic and numerical (bumping)
 - [x] Phase 3: Binomial tree (Cox-Ross-Rubinstein), including American options
 - [x] Phase 4: Monte Carlo pricing with standard error and antithetic variates
-- [ ] Phase 5: Implied volatility solver (Newton-Raphson with bisection fallback)
+- [x] Phase 5: Implied volatility solver (Newton-Raphson with bisection fallback)
 - [ ] Phase 6: Streamlit demo page with plots
 
 ## Quick example
@@ -40,6 +41,17 @@ MCResult(price=10.4673..., std_error=0.0330..., paths=100000)
 
 Both are within one standard error of the Black-Scholes price, 10.4506. The true price lies
 in `price ± 1.96 * std_error` about 95% of the time.
+
+Implied volatility runs Black-Scholes backwards: given a price, it finds the σ that
+produces it (Newton's method inside a bracket, with bisection as the fallback).
+
+```python
+>>> from optionlab import implied_vol
+>>> implied_vol(1.875, S=21, K=20, T=0.25, r=0.1)  # Hull's example: 23.5%
+0.2345129...
+>>> implied_vol(10.4506, S=100, K=100, T=1, r=0.05)  # the rounded price above: back to 20%
+0.200000...
+```
 
 Conventions: `T` in years; `r`, `sigma`, `q` annualised decimals (0.05 = 5%);
 `option` is `"call"` or `"put"`. `bs_price` and the Greeks accept scalars and numpy arrays;
@@ -88,6 +100,7 @@ step counts, with an error that falls like 1/N:
 - [Greeks notes](docs/greeks_notes.md): intuition, scaling conventions, and how the formulas are verified
 - [Binomial tree notes](docs/binomial_notes.md): u, d, p, backward induction, American exercise and convergence
 - [Monte Carlo notes](docs/monte_carlo_notes.md): exact sampling, why the error falls like 1/√N, antithetic variates, and how the standard error is tested
+- [Implied volatility notes](docs/implied_vol_notes.md): why there is exactly one answer, Newton vs bisection, the two fixes random testing forced, and where the price stops determining σ
 
 ## Known limitations
 
@@ -111,3 +124,18 @@ step counts, with an error that falls like 1/N:
 - For σ√T above about 2 (e.g. 200% volatility over one year), a few rare, huge paths carry
   most of the price. A typical Monte Carlo run then gives a price that is too low and a
   standard error that is too small. See the [Monte Carlo notes](docs/monte_carlo_notes.md).
+- `implied_vol` inverts the *European* Black-Scholes formula and takes scalar inputs. For
+  American options (most listed US stock options) it is exact for calls on non-dividend
+  stocks only; elsewhere the early-exercise premium makes the implied volatility too high.
+  Example: the American put above (S = K = 100, T = 1, σ = 20%) is worth 6.09, and inverting
+  that with the European formula gives 21.4%.
+- `implied_vol` raises `ValueError` for prices outside the no-arbitrage bounds, exactly on
+  the lower bound (σ would be 0), and at `T == 0`, where no volatility fits.
+- Deep in the money, the price is almost all intrinsic value and barely moves with σ:
+  rounding the price moves σ by about 2.2e-16 · price / vega. For a 1-year call with K = 100
+  at S = 400, the next float up moves σ from 0.20007 to 0.20014. With real 2-decimal quotes
+  it is far worse: one cent is 9 vol points for a 3-month call at S = 150, K = 100. See the
+  [implied volatility notes](docs/implied_vol_notes.md).
+- Below about 1e-300, at the bottom of the float range, `bs_price` itself loses accuracy
+  (the two terms of the formula underflow and cancel), so prices and implied volatilities
+  there are unreliable. Down to 7e-298 it is accurate to about 2.5e-11 relative.

@@ -35,17 +35,28 @@ every line in an interview.
 | 2 | Greeks: analytic and numerical (bumping) | done |
 | 3 | CRR binomial tree, European and American, plus convergence plot | done |
 | 4 | Monte Carlo with standard error and antithetic variates | done |
-| 5 | Implied volatility (Newton-Raphson, bisection fallback) | **not started** |
+| 5 | Implied volatility (Newton-Raphson, bisection fallback) | done |
 | 6 | Streamlit demo | **in progress**: Pricing, Greeks and Monte Carlo tabs, plain-English layer |
 
 Next, in order:
 1. **Monte Carlo tab, step 2:** a "watch it converge" chart: price ± 1.96·SE against the
    number of simulations (log x, about 1,000 to 1,000,000), with a dashed Black-Scholes line.
+   Plan agreed: same seed at every point (check numpy's prefix property in a test first);
+   `test_greeks_tab_draws_six_charts` counts page-wide charts and will need a by-title lookup.
 2. **Monte Carlo tab, step 3:** "Show the maths" (S_T formula, SE = s/√n, live plain vs
    antithetic SE), a glossary entry, the README demo sentence, and this file.
-3. Phase 5 (plan it first).
+3. Demo idea, plan first: a "what volatility is the market assuming?" box (type a price,
+   get `implied_vol`), plain-English first.
 4. Optional, paused: Phase 6 tree tab (live tree vs Black-Scholes convergence, American vs
    European), then tick Phase 6 in the README.
+5. Deferred on purpose (found in a review, 2026-11-05; fix before hosting the demo publicly):
+   `$...$` pairs in `st.markdown` sentences render as LaTeX (escape as `\$`); at σ = 0 the
+   Monte Carlo tab says "just outside the range, try another seed"; S or K near 1e308
+   crashes the Greeks tab (add `max_value`); `crr_price` returns inf/nan once
+   σ√(T·N) > ~710 (library only; the demo can't reach it).
+6. Unexplained, once: `test_property_monte_carlo_put_call_parity` failed in one full run
+   (2026-11-05) and did not reproduce in 5 more; output was not kept. If it recurs, save
+   the full output (`pytest -q > file`) and look for a hypothesis health check.
 
 ## Commands (Windows; PowerShell or Git Bash)
 
@@ -54,7 +65,7 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -e ".[dev,validation,plots,app]"   # extras: dev, validation, plots, app
 
-.venv\Scripts\python -m pytest -q                # ~1,650 tests, about 1 min (45-105 s seen)
+.venv\Scripts\python -m pytest -q                # ~1,860 tests, about 1 min (60-120 s seen)
 .venv\Scripts\python -m pytest tests/test_app.py -q
 pytest --hypothesis-profile=thorough             # 5,000 examples per property (default 300)
 
@@ -70,12 +81,13 @@ src/optionlab/
   greeks.py         delta, gamma, vega, theta, rho, numerical_greeks
   binomial.py       crr_price (scalar only; steps, exercise="european"|"american")
   monte_carlo.py    mc_price -> MCResult(price, std_error, paths) (scalar only; seed, antithetic)
+  implied_volatility.py  implied_vol(price, S, K, T, r, q, option, tol, max_iter) (scalar only)
   __init__.py       public exports
 tests/
-  test_black_scholes.py, test_greeks.py, test_monte_carlo.py   unit and reference tests
+  test_black_scholes.py, test_greeks.py, test_monte_carlo.py, test_implied_vol.py   unit and reference tests
   test_binomial.py             tree tests, incl. its QuantLib checks ("crr" and FD engines)
   test_properties.py           hypothesis property tests (profiles in conftest.py)
-  test_quantlib_crosscheck.py  analytic and Monte Carlo vs QuantLib (skipped if missing)
+  test_quantlib_crosscheck.py  analytic, Monte Carlo and implied vol vs QuantLib (skipped if missing)
   test_app.py                  Streamlit AppTest tests (skipped if Streamlit is missing)
   test_readme.py               runs the README's >>> example; checks relative links in README and docs
 app/streamlit_app.py           demo: sidebar inputs; Pricing, Sensitivities (Greeks), Monte Carlo tabs
@@ -97,7 +109,11 @@ docs/                          *_notes.md intuition notes per phase, convergence
 - Bad inputs raise `ValueError` with a clear message: non-finite values, S <= 0, K <= 0,
   T < 0, sigma < 0. Greeks raise at T == 0 or sigma == 0; prices don't. The tree also
   raises for sigma == 0 and for p outside (0, 1). `mc_price` raises for paths < 2, and with
-  antithetic for odd paths or paths < 4.
+  antithetic for odd paths or paths < 4. `implied_vol` raises at T == 0, for non-finite
+  prices, and for prices not strictly inside the no-arbitrage bounds (also exactly on the
+  lower bound, where σ would be 0).
+- Implied vol: `tol` is on **σ** (stop when a step moves σ by < tol), never on the price;
+  Newton runs on ln(price) inside a [lo, hi] bracket, bisecting when a step would leave it.
 - Every phase gets a docs note (`docs/<topic>_notes.md`) and a README update (roadmap tick,
   example, Known limitations).
 - **The demo is for the general public.** Plain English and live sentences first (dollar
@@ -144,6 +160,20 @@ docs/                          *_notes.md intuition notes per phase, convergence
   - hypothesis properties skip < 1% in-the-money cases and σ√T > 2 (rare huge paths dominate,
     so the price is typically too low and the SE too small). Don't widen the tolerance there.
   - at σ = 0 the SE is ~1e-16 (np.mean rounding), not exactly 0: compare with a tolerance.
+- **Implied volatility:**
+  - Hull's example (call 1.875, S = 21, K = 20, r = 10%, T = 0.25): 0.2345 (Hull rounds to 0.235)
+  - round trips σ → price → σ to 1e-8, down to prices of 1e-57; a test shows plain Newton
+    dividing by zero (K = 150 call) where ours converges
+  - hypothesis: the σ found always reproduces the price; it equals the true σ only where
+    ε·price/vega < 1e-10 and price > 1e-300. Deep in the money the price no longer determines
+    σ (rounding moves it by ε·price/vega, 0.01 or more), and below 1e-300 `bs_price` itself
+    is wrong (its terms underflow), so don't tighten either. Write ε·price < 1e-10·vega,
+    not a division: vega underflows to 0.
+  - QuantLib `impliedVolatility`: pass accuracy 1e-12 (default 1e-4 is 1e-5 off), and compare
+    only where vega ≥ 1e-4. Below that its solver stops on the price error and is off by up to
+    0.67 (it returns its minVol); ours is the more accurate one there.
+  - lesson: a 200,000-case random round-trip scan found two bugs the hand-written tests
+    missed (a price tolerance, and Newton creeping far out of the money). Scan before trusting.
 - **Docs:** `tests/test_readme.py` runs the README's `>>>` example and fails if the printed
   values drift; keep README outputs seeded and use `...` (ELLIPSIS) for trailing digits.
 - **Mutation testing** uses cosmic-ray (mutmut needs WSL on Windows). Set `PYTHONUTF8=1`,
@@ -167,3 +197,8 @@ docs/                          *_notes.md intuition notes per phase, convergence
   `https://api.github.com/repos/OmarSorin/Options_Pricer/contents/<path>` with
   `Accept: application/vnd.github.html`.
 - The tree's default N = 500 gives about 2 correct decimals (ATM error ≈ 0.004).
+- Don't name a module after the function it exports: with `implied_vol.py` exporting
+  `implied_vol`, `import optionlab.implied_vol` gave the *function* (hence `implied_volatility.py`).
+  To patch module internals in a script, use `sys.modules["optionlab.implied_volatility"]`.
+- Bash heredocs are fine for quick read-only Python checks, but `\$` and `\n` get mangled;
+  write anything with backslashes to a file with the Write tool.

@@ -153,5 +153,9 @@ def test_property_implied_vol_round_trip(S, K, T, r, sigma, q, option):
     #    moves sigma by about EPS * price / vega. Deep in the money (a large price that is
     #    almost all intrinsic value, vega ~1e-14) that is 0.01 or more, so the price simply
     #    does not contain sigma to 8 digits. There only check 1 is meaningful.
-    assume(EPS * price / vega(S, K, T, r, sigma, q) < 1e-10)
+    #    Written without dividing, because vega can underflow to 0.
+    #    Also skip prices below 1e-300: there bs_price itself loses accuracy (its two terms
+    #    underflow; at an exact price of 1.4e-311 it returns 5.9e-309), so no sigma is right.
+    assume(EPS * price < 1e-10 * vega(S, K, T, r, sigma, q))
+    assume(price > 1e-300)
     assert found == pytest.approx(sigma, abs=1e-8)
