@@ -8,32 +8,38 @@ theta / 365). These match optionlab exactly, so no conversion is applied.
 QuantLib's expiry is a whole number of days, so T is always days / 365 here.
 """
 
+import numpy as np
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from scipy.stats import norm
 
 ql = pytest.importorskip("QuantLib")
 
-from optionlab import bs_price, d1_d2, delta, gamma, mc_price, rho, theta, vega  # noqa: E402
+from optionlab import bs_price, d1_d2, delta, gamma, implied_vol, mc_price, rho, theta, vega  # noqa: E402
 
 TODAY = ql.Date(3, 11, 2026)
 DAY_COUNT = ql.Actual365Fixed()
 
 
-def quantlib_option(S, K, days, r, sigma, q, option, make_engine=ql.AnalyticEuropeanEngine):
-    """A QuantLib European option. make_engine(process) builds the pricing engine."""
+def quantlib_process(S, r, sigma, q):
+    """A QuantLib Black-Scholes-Merton process: spot S, flat rates r and q, flat volatility sigma."""
     ql.Settings.instance().evaluationDate = TODAY
 
     def flat_curve(rate):
         return ql.YieldTermStructureHandle(ql.FlatForward(TODAY, rate, DAY_COUNT, ql.Continuous))
 
-    process = ql.BlackScholesMertonProcess(
+    return ql.BlackScholesMertonProcess(
         ql.QuoteHandle(ql.SimpleQuote(S)),
         flat_curve(q),
         flat_curve(r),
         ql.BlackVolTermStructureHandle(ql.BlackConstantVol(TODAY, ql.NullCalendar(), sigma, DAY_COUNT)),
     )
+
+
+def quantlib_option(S, K, days, r, sigma, q, option, make_engine=ql.AnalyticEuropeanEngine):
+    """A QuantLib European option. make_engine(process) builds the pricing engine."""
+    process = quantlib_process(S, r, sigma, q)
     kind = ql.Option.Call if option == "call" else ql.Option.Put
     instrument = ql.VanillaOption(ql.PlainVanillaPayoff(kind, K), ql.EuropeanExercise(TODAY + days))
     instrument.setPricingEngine(make_engine(process))
@@ -91,6 +97,74 @@ def test_matches_quantlib(S, K, days, r, sigma, q, option):
 )
 def test_property_matches_quantlib(S, K, days, r, sigma, q, option):
     test_matches_quantlib(S, K, days, r, sigma, q, option)
+
+
+# --- Implied volatility: ours against QuantLib's VanillaOption.impliedVolatility --------
+# Checked before writing this test: QuantLib's default accuracy (1e-4) is loose, 1e-5 off
+# at the money, so we pass 1e-12 (it then agrees with us to ~1e-13). Its search range
+# [minVol, maxVol] = [1e-7, 4.0] is wider than any sigma tested here. The process it gets
+# starts at a deliberately wrong 30% volatility, so its solver has to find sigma itself.
+#
+# QuantLib is only a reference where vega >= 1e-4. Below that its solver stops on the
+# PRICE error (the bug fixed in our step 3a), and measured against the true sigma over
+# 4,000 random cases it was off by up to 6e-7 (vega 1e-8 to 1e-4), 1e-2 (1e-12 to 1e-8)
+# and 0.67 (below 1e-12, where it returns its minVol of 1e-7); ours stayed within 8e-15.
+# Our accuracy there is checked against the true sigma in test_properties.py.
+
+EPS = np.finfo(float).eps
+QUANTLIB_MIN_VEGA = 1e-4
+
+
+def quantlib_is_a_reference(S, K, T, r, sigma, q, option):
+    """True where both the price and QuantLib's solver pin sigma down to ~1e-10.
+
+    1. Deep in the money the price is almost all intrinsic value: rounding it moves sigma by
+       about EPS * price / vega, which can be 0.01 or more, so no solver can match there
+       (see test_properties.py). Written without dividing, because vega can underflow to 0.
+    2. QuantLib needs vega >= QUANTLIB_MIN_VEGA (see above).
+    """
+    price = bs_price(S, K, T, r, sigma, q, option)
+    v = vega(S, K, T, r, sigma, q)
+    return price > 0 and EPS * price < 1e-10 * v and v >= QUANTLIB_MIN_VEGA
+
+
+def assert_implied_vol_matches_quantlib(S, K, days, r, sigma, q, option):
+    T = days / 365
+    price = bs_price(S, K, T, r, sigma, q, option)
+    kind = ql.Option.Call if option == "call" else ql.Option.Put
+    instrument = ql.VanillaOption(ql.PlainVanillaPayoff(kind, K), ql.EuropeanExercise(TODAY + days))
+    theirs = instrument.impliedVolatility(price, quantlib_process(S, r, 0.3, q), 1e-12, 1000, 1e-7, 4.0)
+    ours = implied_vol(price, S, K, T, r, q, option)
+    assert ours == pytest.approx(theirs, abs=1e-8), (ours, theirs, price)
+    assert ours == pytest.approx(sigma, abs=1e-8)
+
+
+IV_GRID = [
+    (S, K, days, r, sigma, q, option)
+    for (S, K, days, r, sigma, q) in GRID
+    for option in ("call", "put")
+    if quantlib_is_a_reference(S, K, days / 365, r, sigma, q, option)
+]
+
+
+@pytest.mark.parametrize("S, K, days, r, sigma, q, option", IV_GRID)
+def test_implied_vol_matches_quantlib(S, K, days, r, sigma, q, option):
+    assert_implied_vol_matches_quantlib(S, K, days, r, sigma, q, option)
+
+
+@settings()  # profile from tests/conftest.py
+@given(
+    S=st.floats(1.0, 1000.0),
+    K=st.floats(1.0, 1000.0),
+    days=st.integers(1, 3650),
+    r=st.floats(-0.02, 0.15),
+    sigma=st.floats(0.01, 2.0),
+    q=st.floats(0.0, 0.10),
+    option=st.sampled_from(["call", "put"]),
+)
+def test_property_implied_vol_matches_quantlib(S, K, days, r, sigma, q, option):
+    assume(quantlib_is_a_reference(S, K, days / 365, r, sigma, q, option))
+    assert_implied_vol_matches_quantlib(S, K, days, r, sigma, q, option)
 
 
 # --- Monte Carlo: our mc_price against QuantLib's MCEuropeanEngine ---------------------
