@@ -16,13 +16,25 @@ numerically. Two facts make this safe:
    So any price strictly inside that range has exactly one implied volatility.
 
 Method: Newton-Raphson, kept inside a bracket, with bisection as the fallback.
-- Newton jumps along the tangent: sigma_new = sigma - (bs_price(sigma) - price) / vega(sigma).
-  Near the answer it is very fast (the number of correct digits roughly doubles each step).
-- But far from the answer vega can be tiny, or even 0 in floating point (deep out of the
-  money, or sigma far too small), and the step shoots off or divides by zero.
-- So we keep a bracket [lo, hi] that is known to contain the answer, shrink it after every
-  step, and whenever Newton would leave the bracket we take its midpoint instead
-  (bisection). Bisection is slow, but it can't fail.
+- Newton jumps along the tangent. Near the answer it is very fast (the number of correct
+  digits roughly doubles each step).
+- We apply it to the LOGARITHM of the price, ln(bs_price(sigma)) = ln(price), whose slope is
+  vega / bs_price:
+      sigma_new = sigma - (ln bs_price(sigma) - ln price) * bs_price(sigma) / vega(sigma)
+  Far out of the money the price is roughly exp(-c / sigma^2): it falls by dozens of orders
+  of magnitude as sigma drops, so the price curve is extremely bent and plain Newton creeps
+  along it (101 steps for a price of 1.6e-57). Its logarithm is nearly straight, so the
+  tangent lands close to the answer (5 steps). Near the money both versions take 4-8.
+- Far from the answer vega can be tiny, or even 0 in floating point, and a Newton step can
+  shoot off. So we keep a bracket [lo, hi] that is known to contain the answer, shrink it
+  after every step, and whenever Newton would leave the bracket we take its midpoint
+  instead (bisection). Bisection is slow, but it can't fail.
+- We stop when a step changes sigma by less than tol. A tolerance on the price would be
+  wrong for cheap options: any sigma prices a 1e-20 option to within 1e-10.
+
+Limit: deep in the money the price is almost all intrinsic value. Rounding the price by one
+part in 1e16 then moves sigma by about 1e-16 * price / vega, which can be 0.01 or more, so
+the price does not determine sigma to many digits. The answer still reproduces the price.
 """
 
 from __future__ import annotations
@@ -35,6 +47,8 @@ from optionlab.greeks import vega
 
 # A price that needs a volatility above this is, in practice, at its upper bound.
 MAX_SIGMA = 1e6
+# The starting guess is never below this (0.1%): see step 3 in implied_vol.
+MIN_START_SIGMA = 1e-3
 
 
 def _price_bounds(S: float, K: float, T: float, r: float, q: float, option: str) -> tuple[float, float]:
@@ -65,8 +79,9 @@ def implied_vol(
     Args:
         price: the option's price, in the same currency unit as S and K.
         option: "call" or "put".
-        tol: stop when the repriced option is within tol of `price`, or when sigma is
-            pinned down to within tol (the bracket is narrower than tol).
+        tol: stop when a step changes sigma by less than tol (sigma is then known to
+            about tol). A tolerance on sigma, not on the price, so it works the same for
+            a $500 option and a $1e-20 one.
         max_iter: the maximum number of Newton or bisection steps.
 
     Returns:
@@ -110,28 +125,41 @@ def implied_vol(
 
     # 3. Starting guess (Brenner-Subrahmanyam), good for at-the-money options:
     #    there price ≈ S * sigma * sqrt(T / (2*pi)), so sigma ≈ sqrt(2*pi / T) * price / S.
-    sigma = np.sqrt(2 * np.pi / T) * price / S
+    #    For a very cheap option that formula gives an absurdly small sigma (1e-310 was seen),
+    #    where d1 overflows, so start no lower than MIN_START_SIGMA. The search can still go
+    #    below it if the answer really is lower, because lo stays at 0.
+    sigma = max(np.sqrt(2 * np.pi / T) * price / S, MIN_START_SIGMA)
     if not lo < sigma < hi:
         sigma = 0.5 * (lo + hi)
 
     # 4. Newton steps inside the bracket, bisection whenever Newton would leave it.
     for _ in range(max_iter):
-        diff = bs_price(S, K, T, r, sigma, q, option) - price
-        if abs(diff) < tol:
-            return float(sigma)
+        model = bs_price(S, K, T, r, sigma, q, option)
+        diff = model - price
+        if diff == 0:
+            return float(sigma)  # exact match
         # The price rises with sigma: too expensive means the answer is below sigma.
         if diff > 0:
             hi = sigma
         else:
             lo = sigma
-        if hi - lo < tol:
-            return float(sigma)
 
+        # Newton on ln(price), not on the price: f(sigma) = ln(model) - ln(price), whose
+        # slope is vega / model. Skipped when vega or the model price underflows to 0.
         slope = vega(S, K, T, r, sigma, q)  # sigma > 0 here, so vega is defined
-        newton = sigma - diff / slope if slope > 0 else None  # vega can underflow to 0
-        if newton is not None and lo < newton < hi:
-            sigma = newton
+        if slope > 0 and model > 0:
+            newton = sigma - (np.log(model) - np.log(price)) * model / slope
         else:
-            sigma = 0.5 * (lo + hi)  # bisection: halve the bracket
+            newton = None
+        if newton is not None and lo < newton < hi:
+            next_sigma = newton
+        else:
+            next_sigma = 0.5 * (lo + hi)  # bisection: halve the bracket
+
+        # Stop on SIGMA, not on the price. "Price within 1e-10" is met by almost any sigma
+        # when the option itself costs less than 1e-10, which gave answers off by 100%.
+        if abs(next_sigma - sigma) < tol:
+            return float(next_sigma)
+        sigma = next_sigma
 
     raise ValueError(f"implied_vol did not converge in {max_iter} steps (tol = {tol}).")

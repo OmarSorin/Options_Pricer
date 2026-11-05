@@ -7,7 +7,7 @@ from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from scipy.stats import norm
 
-from optionlab import bs_price, d1_d2, delta, gamma, mc_price, numerical_greeks, rho, theta, vega
+from optionlab import bs_price, d1_d2, delta, gamma, implied_vol, mc_price, numerical_greeks, rho, theta, vega
 
 pytestmark = pytest.mark.filterwarnings("error")
 
@@ -128,3 +128,30 @@ def test_property_monte_carlo_put_call_parity(S, K, T, r, sigma, q):
     forward_value = S * np.exp(-q * T) - K * np.exp(-r * T)
     combined_se = np.hypot(call.std_error, put.std_error)
     assert abs((call.price - put.price) - forward_value) <= 5 * combined_se
+
+
+# --- Implied volatility -----------------------------------------------------------------
+
+EPS = np.finfo(float).eps  # 2.2e-16, the relative rounding step of a float
+
+
+@SETTINGS
+@given(spot, strike, expiry, rate, vol, div, option_type)
+def test_property_implied_vol_round_trip(S, K, T, r, sigma, q, option):
+    price = bs_price(S, K, T, r, sigma, q, option)
+    spot_pv, strike_pv = S * np.exp(-q * T), K * np.exp(-r * T)
+    lower = max(spot_pv - strike_pv, 0.0) if option == "call" else max(strike_pv - spot_pv, 0.0)
+    # Deep in the money the time value can be so small that the price rounds to exactly
+    # its lower bound; then no sigma fits and implied_vol raises, correctly.
+    assume(price > lower)
+
+    found = implied_vol(price, S, K, T, r, q, option)
+
+    # 1. Always: the volatility found reproduces the price.
+    assert bs_price(S, K, T, r, found, q, option) == pytest.approx(price, rel=1e-9, abs=1e-9 * (S + K))
+    # 2. Where the price still determines sigma: rounding the price (relative step EPS)
+    #    moves sigma by about EPS * price / vega. Deep in the money (a large price that is
+    #    almost all intrinsic value, vega ~1e-14) that is 0.01 or more, so the price simply
+    #    does not contain sigma to 8 digits. There only check 1 is meaningful.
+    assume(EPS * price / vega(S, K, T, r, sigma, q) < 1e-10)
+    assert found == pytest.approx(sigma, abs=1e-8)

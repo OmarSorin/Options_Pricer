@@ -37,6 +37,28 @@ def test_round_trip_recovers_sigma(S, K, T, r, sigma, q, option):
     assert implied_vol(price, S, K, T, r, q, option) == pytest.approx(sigma, abs=1e-8)
 
 
+@pytest.mark.filterwarnings("error")  # no overflow from trying absurdly small sigmas either
+@pytest.mark.parametrize(
+    ("K", "T"),
+    [(150, 0.1), (200, 0.25), (300, 0.25)],  # prices about 1e-10, 1e-11 and 1e-27
+)
+def test_very_cheap_options_still_give_the_right_sigma(K, T):
+    # A stopping rule on the PRICE (|repriced - price| < 1e-10) is met by almost any sigma
+    # when the option itself costs less than 1e-10. These prices are still accurate to
+    # about 12 significant digits, so sigma is recoverable: the stopping rule must be on sigma.
+    price = bs_price(100, K, T, 0.05, 0.2)
+    assert implied_vol(price, 100, K, T, 0.05) == pytest.approx(0.2, abs=1e-8)
+
+
+def test_far_out_of_the_money_converges_quickly():
+    # Found by hypothesis: price 1.6e-57. Newton on the price itself crept down from
+    # sigma = 0.5 by about 0.007 per step and ran out of steps (101 needed). Newton on
+    # ln(price) needs 5. Far out of the money the price is roughly exp(-c / sigma^2), so its
+    # logarithm is nearly straight in sigma and the tangent lands close to the answer.
+    price = bs_price(1.0, 52.0, 1.0, 0.0, 0.25)
+    assert implied_vol(price, 1.0, 52.0, 1.0, 0.0, max_iter=20) == pytest.approx(0.25, abs=1e-8)
+
+
 def test_reference_values_from_the_textbook_prices():
     # The 4-decimal reference prices from CLAUDE.md give back sigma = 20% to about 1e-5
     # (they are rounded, so not exactly 0.2).
