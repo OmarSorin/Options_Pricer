@@ -142,6 +142,21 @@ def test_different_seed_gives_different_price():
     assert mc_price(**REF, paths=10_000, seed=7).price != mc_price(**REF, paths=10_000, seed=8).price
 
 
+@pytest.mark.parametrize("seed", [0, 42, 12345])
+@pytest.mark.parametrize("m", [1, 2, 999, 1_000, 31_623, 500_000])
+def test_same_seed_draws_are_a_prefix_of_longer_runs(seed, m):
+    # The demo's convergence chart prices at many path counts with ONE seed. That is only a
+    # single growing sample (each point adds paths to the previous one, instead of a fresh
+    # unrelated run) if numpy draws the same numbers in the same order however many we ask
+    # for: the first m of n draws equal a run of m draws. numpy doesn't promise this in its
+    # docs, so check it here. mc_price draws `paths` normals (plain) or `paths // 2`
+    # (antithetic) in one call, so this covers both.
+    n = 1_000_000
+    long_run = np.random.default_rng(seed).standard_normal(n)
+    short_run = np.random.default_rng(seed).standard_normal(m)
+    np.testing.assert_array_equal(short_run, long_run[:m])
+
+
 # --- Edge cases: no randomness left, so the answer is exact -----------------------------
 
 
