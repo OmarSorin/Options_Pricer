@@ -5,6 +5,7 @@ page renders, shows the library's numbers, and turns library errors into message
 instead of crashing. Skipped if Streamlit isn't installed (pip install -e ".[app]").
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,11 @@ AMER_LABEL = "Step-by-step model, American (can exercise early)"
 
 def markdown_text(at: AppTest) -> str:
     return "\n".join(m.value for m in at.markdown)
+
+
+def chart_titles(at: AppTest) -> list[str]:
+    """The title of every Altair chart on the page (AppTest exposes them as vega_lite_chart)."""
+    return [json.loads(c.proto.spec).get("title") for c in at.get("vega_lite_chart")]
 
 
 def test_default_page_shows_library_prices():
@@ -136,8 +142,20 @@ def test_greeks_table_is_under_show_the_maths():
 
 
 def test_greeks_tab_draws_six_charts():
+    # AppTest sees every tab at once, so look the charts up by title instead of counting all
+    # charts on the page (a chart in another tab would change that count).
     at = run_app()
-    assert len(at.get("vega_lite_chart")) == 6  # price + five Greeks
+    expected = {
+        "Option price",
+        "Delta: price change per $1 stock move",
+        "Gamma: change in delta per $1 stock move",
+        "Vega: price change per 1 vol point",
+        "Theta: price change per day",
+        "Rho: price change per 1% rate rise",
+    }
+    titles = chart_titles(at)
+    assert expected <= set(titles), titles
+    assert sum(t in expected for t in titles) == 6  # each drawn once
 
 
 def test_greeks_error_at_expiry_is_shown_not_raised():
