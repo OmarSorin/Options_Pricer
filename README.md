@@ -11,7 +11,7 @@ derivatives pricing.
 - [x] Phase 3: Binomial tree (Cox-Ross-Rubinstein), including American options
 - [x] Phase 4: Monte Carlo pricing with standard error and antithetic variates
 - [x] Phase 5: Implied volatility solver (Newton-Raphson with bisection fallback)
-- [ ] Phase 6: Streamlit demo page with plots
+- [x] Phase 6: Streamlit demo page with plots
 
 ## Quick example
 
